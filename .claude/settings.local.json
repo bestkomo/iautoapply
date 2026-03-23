@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx prisma:*)",
+      "Bash(npm run:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(npx tsc:*)",
+      "Bash(netstat -ano)",
+      "Bash(findstr \":3001\")",
+      "Bash(dir \"C:\\\\Users\\\\workpc\\\\Desktop\" /b)",
+      "Bash(findstr /i \"resume cv\")",
+      "Bash(find C:Usersworkpc -maxdepth 3 -name *.pdf -o -name *.docx)",
+      "Bash(find C:Usersworkpc -maxdepth 4 -iname *resume* -o -iname *cv*)",
+      "Bash(npm ls:*)",
+      "Bash(node prisma/seed.mjs)"
+    ]
+  }
+}

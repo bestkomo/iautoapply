@@ -192,7 +192,8 @@ export async function applyToJobReal(
 
   try {
     browser = await chromium.launch({
-      headless: true,
+      headless: false,
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
