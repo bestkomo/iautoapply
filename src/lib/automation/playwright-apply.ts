@@ -30,23 +30,37 @@ export interface ApplyResult {
 /* ------------------------------------------------------------------ */
 
 const SCREENSHOTS_DIR = resolve(process.cwd(), "screenshots");
-const APPLICATION_TIMEOUT = 60_000; // 60 seconds per application
+const APPLICATION_TIMEOUT = 90_000; // 90 seconds per application
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+/** Confirmation keywords that indicate a successful submission */
+const CONFIRMATION_KEYWORDS = [
+  "thank you",
+  "thanks for applying",
+  "application submitted",
+  "application received",
+  "successfully submitted",
+  "we have received",
+  "your application has been",
+  "application complete",
+  "you have applied",
+  "confirmation",
+];
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/** Small random delay to appear human-like (200–600 ms) */
+/** Small random delay to appear human-like (200–500 ms) */
 function humanDelay(): Promise<void> {
-  const ms = 200 + Math.random() * 400;
+  const ms = 200 + Math.random() * 300;
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Longer random delay between major steps (500–1500 ms) */
+/** Longer random delay between major steps (1000–2000 ms) */
 function stepDelay(): Promise<void> {
-  const ms = 500 + Math.random() * 1000;
+  const ms = 1000 + Math.random() * 1000;
   return new Promise((r) => setTimeout(r, ms));
 }
 
@@ -108,17 +122,20 @@ async function dismissPopups(page: Page) {
         await humanDelay();
       }
     } catch {
-      // Ignore — popup may not exist
+      // Ignore -- popup may not exist
     }
   }
 }
 
-/** Type text into a field with human-like per-character delay */
+/** Type text into a field with human-like delay */
 async function humanType(page: Page, selector: string, text: string): Promise<boolean> {
   try {
     const loc = page.locator(selector).first();
-    if (await loc.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await loc.click({ timeout: 2000 });
+    if (await loc.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await loc.click({ timeout: 3000 });
+      await humanDelay();
+      // Clear existing content first
+      await loc.fill("");
       await humanDelay();
       await loc.fill(text);
       await humanDelay();
@@ -177,6 +194,28 @@ async function takeScreenshot(page: Page, label: string): Promise<string> {
   return filepath;
 }
 
+/**
+ * Check if the page shows a confirmation message indicating successful submission.
+ * Returns true if confirmation text is found.
+ */
+async function checkForConfirmation(page: Page): Promise<boolean> {
+  try {
+    const bodyText = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
+    const lower = bodyText.toLowerCase();
+    return CONFIRMATION_KEYWORDS.some((kw) => lower.includes(kw));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Scroll down the page to reveal any additional fields that might be below the fold.
+ */
+async function scrollToBottom(page: Page) {
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await humanDelay();
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main entry point                                                   */
 /* ------------------------------------------------------------------ */
@@ -189,11 +228,12 @@ export async function applyToJobReal(
   const platform = detectPlatform(applyUrl);
 
   console.log(`[Playwright] Starting application to ${applyUrl} (platform: ${platform})`);
+  console.log(`[Playwright] Profile: ${profile.firstName} ${profile.lastName}, email: ${profile.email}, phone: ${profile.phone}, location: ${profile.location}`);
 
   try {
     browser = await chromium.launch({
       headless: false,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined,
+      channel: "chrome",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -244,7 +284,7 @@ export async function applyToJobReal(
         break;
     }
 
-    // Take a screenshot before closing for debugging
+    // Take a final screenshot for debugging
     try {
       result.screenshotPath = await takeScreenshot(page, `${platform}-${result.success ? "success" : "fail"}`);
     } catch {
@@ -298,56 +338,72 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
     // Wait for the application form to appear
     await page.waitForSelector(
       '#application_form, .application-form, form[action*="application"], form',
-      { timeout: 10000 }
+      { timeout: 15000 }
     ).catch(() => {});
     await stepDelay();
 
-    // Fill first name
+    // --- Fill first name ---
+    console.log("[Playwright] Filling first name");
     await tryTypeMultiple(page, [
       'input[name*="first_name"]',
       'input[id*="first_name"]',
       'input[autocomplete="given-name"]',
       'input[placeholder*="First"]',
     ], profile.firstName);
+    await stepDelay();
 
-    // Fill last name
+    // --- Fill last name ---
+    console.log("[Playwright] Filling last name");
     await tryTypeMultiple(page, [
       'input[name*="last_name"]',
       'input[id*="last_name"]',
       'input[autocomplete="family-name"]',
       'input[placeholder*="Last"]',
     ], profile.lastName);
+    await stepDelay();
 
-    // Fill email
+    // --- Fill email ---
+    console.log("[Playwright] Filling email");
     await tryTypeMultiple(page, [
       'input[type="email"]',
       'input[name*="email"]',
       'input[id*="email"]',
       'input[autocomplete="email"]',
     ], profile.email);
+    await stepDelay();
 
-    // Fill phone
+    // --- Fill phone ---
     if (profile.phone) {
+      console.log("[Playwright] Filling phone");
       await tryTypeMultiple(page, [
         'input[type="tel"]',
         'input[name*="phone"]',
         'input[id*="phone"]',
         'input[autocomplete="tel"]',
       ], profile.phone);
+      await stepDelay();
     }
 
-    // Fill location
+    // --- Select Country dropdown (required on Greenhouse) ---
+    console.log("[Playwright] Selecting country");
+    const countrySelected = await selectGreenhouseCountry(page, "United States");
+    if (countrySelected) {
+      console.log("[Playwright] Country selected: United States");
+      await stepDelay();
+    }
+
+    // --- Fill Location (City) ---
+    // Greenhouse uses an autocomplete location field
     if (profile.location) {
-      await tryTypeMultiple(page, [
-        'input[name*="location"]',
-        'input[id*="location"]',
-        'input[placeholder*="Location"]',
-        'input[placeholder*="City"]',
-        'input[name*="city"]',
-      ], profile.location);
+      console.log("[Playwright] Filling location/city");
+      const locationFilled = await fillGreenhouseLocation(page, profile.location);
+      if (locationFilled) {
+        console.log("[Playwright] Location filled:", profile.location);
+      }
+      await stepDelay();
     }
 
-    // Fill LinkedIn
+    // --- Fill LinkedIn ---
     if (profile.linkedinUrl) {
       await tryTypeMultiple(page, [
         'input[name*="linkedin"]',
@@ -357,7 +413,7 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
       ], profile.linkedinUrl);
     }
 
-    // Fill portfolio
+    // --- Fill portfolio ---
     if (profile.portfolioUrl) {
       await tryTypeMultiple(page, [
         'input[name*="portfolio"]',
@@ -367,17 +423,25 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
       ], profile.portfolioUrl);
     }
 
-    // Upload resume
+    // --- Upload resume ---
     if (profile.resumePath) {
+      console.log("[Playwright] Uploading resume");
       await uploadResume(page, profile.resumePath);
     }
 
+    // Scroll down to check for additional required fields
+    await scrollToBottom(page);
     await stepDelay();
+
+    // Look for any additional required fields we may have missed
+    // Check for required select dropdowns that are not filled
+    await fillRequiredSelectsWithFirstOption(page);
 
     // Take pre-submit screenshot
     await takeScreenshot(page, "greenhouse-pre-submit");
 
-    // Click submit
+    // --- Click submit ---
+    console.log("[Playwright] Clicking submit");
     const submitSelectors = [
       'button[type="submit"]',
       'input[type="submit"]',
@@ -389,26 +453,59 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
     for (const sel of submitSelectors) {
       try {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
           await btn.click();
           submitted = true;
+          console.log(`[Playwright] Submit clicked via: ${sel}`);
           break;
         }
       } catch { /* continue */ }
     }
 
     if (submitted) {
-      // Wait for confirmation or navigation
-      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      // Wait for page to respond after submit
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
       await stepDelay();
+      await stepDelay(); // extra wait for slow confirmations
+
+      // Take post-submit screenshot
+      await takeScreenshot(page, "greenhouse-post-submit");
+
+      // Check for confirmation
+      const confirmed = await checkForConfirmation(page);
+      if (confirmed) {
+        console.log("[Playwright] Greenhouse: Confirmation detected!");
+        return {
+          success: true,
+          platform: "greenhouse",
+          message: "Application submitted and confirmed via Greenhouse",
+        };
+      }
+
+      // Check if we're still on the same form (validation errors)
+      const hasErrors = await page.locator('.field-error, .error-message, [class*="error"], .invalid-feedback').first()
+        .isVisible({ timeout: 2000 }).catch(() => false);
+      if (hasErrors) {
+        console.log("[Playwright] Greenhouse: Form validation errors detected after submit");
+        return {
+          success: false,
+          platform: "greenhouse",
+          message: "Greenhouse form has validation errors - some required fields may be missing",
+        };
+      }
+
+      // If no confirmation text but also no errors, assume it went through
+      return {
+        success: true,
+        platform: "greenhouse",
+        message: "Application submitted via Greenhouse (no explicit confirmation detected)",
+      };
     }
 
     return {
-      success: submitted,
+      success: false,
       platform: "greenhouse",
-      message: submitted
-        ? "Application submitted via Greenhouse"
-        : "Greenhouse form filled but submit button not found",
+      message: "Greenhouse form filled but submit button not found",
     };
   } catch (error) {
     return {
@@ -417,6 +514,161 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
       message: `Greenhouse error: ${error instanceof Error ? error.message : "Unknown"}`,
     };
   }
+}
+
+/**
+ * Select a country in Greenhouse's country dropdown.
+ * Greenhouse uses either a native <select> or a custom dropdown.
+ */
+async function selectGreenhouseCountry(page: Page, country: string): Promise<boolean> {
+  // Try 1: Native <select> element for country
+  const selectSelectors = [
+    'select[name*="country"]',
+    'select[id*="country"]',
+    'select[data-field*="country"]',
+    'select[aria-label*="Country"]',
+  ];
+  for (const sel of selectSelectors) {
+    try {
+      const select = page.locator(sel).first();
+      if (await select.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await select.selectOption({ label: country });
+        await humanDelay();
+        return true;
+      }
+    } catch { /* try next */ }
+  }
+
+  // Try 2: Custom dropdown (click to open, then select option)
+  const dropdownTriggers = [
+    '[class*="country"] [class*="select"]',
+    '[data-field*="country"]',
+    'div[class*="country"]',
+    'label:has-text("Country") + div',
+  ];
+  for (const sel of dropdownTriggers) {
+    try {
+      const trigger = page.locator(sel).first();
+      if (await trigger.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await trigger.click();
+        await humanDelay();
+        // Look for the option in dropdown list
+        const option = page.locator(`li:has-text("${country}"), div[role="option"]:has-text("${country}"), option:has-text("${country}")`).first();
+        if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await option.click();
+          await humanDelay();
+          return true;
+        }
+      }
+    } catch { /* try next */ }
+  }
+
+  // Try 3: Select by value instead of label
+  for (const sel of selectSelectors) {
+    try {
+      const select = page.locator(sel).first();
+      if (await select.count() > 0) {
+        // Try common US values
+        for (const val of ["US", "USA", "United States", "United States of America"]) {
+          try {
+            await select.selectOption(val);
+            await humanDelay();
+            return true;
+          } catch { /* try next value */ }
+        }
+      }
+    } catch { /* try next */ }
+  }
+
+  console.log("[Playwright] Could not find/select country dropdown");
+  return false;
+}
+
+/**
+ * Fill the location/city field on Greenhouse.
+ * Greenhouse often has an autocomplete field that shows suggestions.
+ */
+async function fillGreenhouseLocation(page: Page, location: string): Promise<boolean> {
+  const locationSelectors = [
+    'input[name*="location"]',
+    'input[id*="location"]',
+    'input[placeholder*="Location"]',
+    'input[placeholder*="City"]',
+    'input[name*="city"]',
+    'input[id*="city"]',
+    'input[autocomplete="address-level2"]',
+    'input[data-field*="location"]',
+  ];
+
+  for (const sel of locationSelectors) {
+    try {
+      const loc = page.locator(sel).first();
+      if (await loc.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await loc.click();
+        await humanDelay();
+        await loc.fill("");
+        await humanDelay();
+        // Type slowly to trigger autocomplete
+        await loc.pressSequentially(location, { delay: 80 });
+        await stepDelay();
+
+        // Check for autocomplete suggestions and click the first one
+        const suggestionSelectors = [
+          '.pac-item', // Google Places autocomplete
+          '[class*="autocomplete"] li',
+          '[class*="suggestion"]',
+          '[role="option"]',
+          '[class*="dropdown"] li',
+          '.location-autocomplete-results li',
+        ];
+        for (const suggSel of suggestionSelectors) {
+          try {
+            const suggestion = page.locator(suggSel).first();
+            if (await suggestion.isVisible({ timeout: 3000 }).catch(() => false)) {
+              await suggestion.click();
+              await humanDelay();
+              return true;
+            }
+          } catch { /* try next */ }
+        }
+
+        // No autocomplete suggestions appeared -- the typed text should suffice
+        return true;
+      }
+    } catch { /* try next */ }
+  }
+
+  return false;
+}
+
+/**
+ * Fill any remaining required <select> elements that are still on their default/placeholder value.
+ * Uses the first non-placeholder option.
+ */
+async function fillRequiredSelectsWithFirstOption(page: Page) {
+  try {
+    const selects = page.locator('select[required], select[aria-required="true"]');
+    const count = await selects.count();
+    for (let i = 0; i < count; i++) {
+      try {
+        const select = selects.nth(i);
+        const currentVal = await select.inputValue().catch(() => "");
+        // If the current value is empty or looks like a placeholder, select the first real option
+        if (!currentVal || currentVal === "" || currentVal === "0") {
+          const options = select.locator("option");
+          const optCount = await options.count();
+          for (let j = 1; j < optCount; j++) { // skip index 0 (usually placeholder)
+            const optVal = await options.nth(j).getAttribute("value").catch(() => "");
+            if (optVal && optVal !== "" && optVal !== "0") {
+              await select.selectOption({ index: j });
+              await humanDelay();
+              break;
+            }
+          }
+        }
+      } catch { /* skip this select */ }
+    }
+  } catch { /* non-critical */ }
 }
 
 /* ------------------------------------------------------------------ */
@@ -438,9 +690,9 @@ async function applyLever(page: Page, profile: ApplicantProfile): Promise<ApplyR
     for (const sel of applyBtnSelectors) {
       try {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
           await btn.click();
-          await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+          await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
           await stepDelay();
           break;
         }
@@ -453,12 +705,14 @@ async function applyLever(page: Page, profile: ApplicantProfile): Promise<ApplyR
       'input[placeholder*="Full name"]',
       'input[placeholder*="name"]',
     ], profile.name);
+    await stepDelay();
 
     // Fill email
     await tryTypeMultiple(page, [
       'input[name="email"]',
       'input[type="email"]',
     ], profile.email);
+    await stepDelay();
 
     // Fill phone
     if (profile.phone) {
@@ -466,6 +720,7 @@ async function applyLever(page: Page, profile: ApplicantProfile): Promise<ApplyR
         'input[name="phone"]',
         'input[type="tel"]',
       ], profile.phone);
+      await stepDelay();
     }
 
     // Fill location
@@ -516,7 +771,7 @@ async function applyLever(page: Page, profile: ApplicantProfile): Promise<ApplyR
     for (const sel of submitSelectors) {
       try {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
           await btn.click();
           submitted = true;
           break;
@@ -525,16 +780,30 @@ async function applyLever(page: Page, profile: ApplicantProfile): Promise<ApplyR
     }
 
     if (submitted) {
-      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
       await stepDelay();
+      await takeScreenshot(page, "lever-post-submit");
+
+      const confirmed = await checkForConfirmation(page);
+      if (confirmed) {
+        return {
+          success: true,
+          platform: "lever",
+          message: "Application submitted and confirmed via Lever",
+        };
+      }
+
+      return {
+        success: true,
+        platform: "lever",
+        message: "Application submitted via Lever (no explicit confirmation detected)",
+      };
     }
 
     return {
-      success: submitted,
+      success: false,
       platform: "lever",
-      message: submitted
-        ? "Application submitted via Lever"
-        : "Lever form filled but submit button not found",
+      message: "Lever form filled but submit button not found",
     };
   } catch (error) {
     return {
@@ -553,8 +822,8 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
   try {
     console.log("[Playwright] Handling Workday application");
 
-    // Workday apps are complex multi-step SPAs. We try our best.
-    // Step 1: Click "Apply" to start
+    // Step 1: Click "Apply" to start the application
+    console.log("[Playwright] Workday: Looking for Apply button on job page");
     const applyBtnSelectors = [
       'a[data-automation-id="jobPostingApplyButton"]',
       'button[data-automation-id="jobPostingApplyButton"]',
@@ -564,26 +833,40 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
     for (const sel of applyBtnSelectors) {
       try {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+        if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
+          console.log(`[Playwright] Workday: Clicking Apply button via: ${sel}`);
           await btn.click();
-          await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
           await stepDelay();
+          await stepDelay(); // extra wait for Workday SPA loading
           break;
         }
       } catch { /* continue */ }
     }
 
-    // Some Workday portals offer "Apply Manually" vs "Use my last application"
-    try {
-      const manualBtn = page.locator('button:has-text("Apply Manually")').first();
-      if (await manualBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await manualBtn.click();
-        await stepDelay();
-      }
-    } catch { /* continue */ }
+    // Step 2: Handle the popup dialog with "Autofill with Resume" / "Apply Manually" / "Use My Last Application"
+    console.log("[Playwright] Workday: Looking for application method dialog");
+    await handleWorkdayMethodDialog(page);
+    await stepDelay();
 
-    // Step 2: Try to fill the "My Information" section
+    // Step 3: Handle "Sign In" or "Create Account" pages
+    // Workday sometimes requires account creation -- try to skip or use "Continue without account"
+    await handleWorkdayAccountPage(page, profile.email);
+    await stepDelay();
+
+    // Step 4: Wait for the actual application form to load
+    console.log("[Playwright] Workday: Waiting for application form");
+    await page.waitForSelector(
+      'input[data-automation-id], input[type="text"], input[type="email"], form',
+      { timeout: 20000 }
+    ).catch(() => {});
+    await stepDelay();
+
+    // Dismiss any popups that appeared
+    await dismissPopups(page);
+
+    // Step 5: Fill the "My Information" section
     // Workday uses data-automation-id attributes heavily
+    console.log("[Playwright] Workday: Filling personal information");
 
     // First name
     await tryTypeMultiple(page, [
@@ -592,6 +875,7 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
       'input[aria-label*="First Name"]',
       'input[placeholder*="First Name"]',
     ], profile.firstName);
+    await stepDelay();
 
     // Last name
     await tryTypeMultiple(page, [
@@ -600,67 +884,152 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
       'input[aria-label*="Last Name"]',
       'input[placeholder*="Last Name"]',
     ], profile.lastName);
+    await stepDelay();
 
     // Email
     await tryTypeMultiple(page, [
       'input[data-automation-id="email"]',
+      'input[data-automation-id="emailAddress"]',
       'input[type="email"]',
       'input[aria-label*="Email"]',
     ], profile.email);
+    await stepDelay();
 
-    // Phone
+    // Phone (Workday often has country code + number)
     if (profile.phone) {
+      // Try the phone device type dropdown first (set to "Mobile" or "Home")
+      try {
+        const phoneTypeSelect = page.locator('select[data-automation-id*="phone"], select[aria-label*="Phone Device Type"]').first();
+        if (await phoneTypeSelect.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await phoneTypeSelect.selectOption({ label: "Mobile" }).catch(() => {});
+          await humanDelay();
+        }
+      } catch { /* non-critical */ }
+
       await tryTypeMultiple(page, [
         'input[data-automation-id="phone-number"]',
         'input[data-automation-id="phone"]',
+        'input[data-automation-id*="phoneNumber"]',
         'input[type="tel"]',
+        'input[aria-label*="Phone Number"]',
         'input[aria-label*="Phone"]',
       ], profile.phone);
+      await stepDelay();
     }
 
     // Address / Location
     if (profile.location) {
       await tryTypeMultiple(page, [
         'input[data-automation-id="addressSection_city"]',
+        'input[data-automation-id="city"]',
         'input[aria-label*="City"]',
         'input[placeholder*="City"]',
       ], profile.location);
+      await stepDelay();
     }
 
     // Upload resume
     if (profile.resumePath) {
-      await uploadResume(page, profile.resumePath);
+      console.log("[Playwright] Workday: Uploading resume");
+      // Workday has a specific file upload area
+      const workdayFileSelectors = [
+        'input[data-automation-id="file-upload-input-ref"]',
+        'input[data-automation-id*="resume"]',
+        'input[type="file"]',
+      ];
+      let uploaded = false;
+      for (const sel of workdayFileSelectors) {
+        try {
+          const input = page.locator(sel).first();
+          if (await input.count() > 0) {
+            await input.setInputFiles(profile.resumePath);
+            uploaded = true;
+            console.log(`[Playwright] Workday: Resume uploaded via: ${sel}`);
+            await stepDelay();
+            break;
+          }
+        } catch { /* try next */ }
+      }
+      if (!uploaded) {
+        // Fallback: generic upload
+        await uploadResume(page, profile.resumePath);
+      }
     }
 
     await stepDelay();
-    await takeScreenshot(page, "workday-pre-submit");
+    await takeScreenshot(page, "workday-step1");
 
-    // Try to submit or advance to next page
-    const nextSelectors = [
-      'button[data-automation-id="bottom-navigation-next-button"]',
-      'button:has-text("Submit")',
-      'button:has-text("Next")',
-      'button:has-text("Continue")',
-    ];
-    let submitted = false;
-    for (const sel of nextSelectors) {
-      try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
-          await btn.click();
-          submitted = true;
-          await stepDelay();
-          break;
-        }
-      } catch { /* continue */ }
+    // Step 6: Navigate through multi-step form
+    // Workday has "Next" and "Continue" buttons between steps
+    console.log("[Playwright] Workday: Navigating through form steps");
+    let stepsCompleted = 0;
+    const maxSteps = 5; // safety limit
+
+    for (let step = 0; step < maxSteps; step++) {
+      const nextSelectors = [
+        'button[data-automation-id="bottom-navigation-next-button"]',
+        'button:has-text("Next")',
+        'button:has-text("Continue")',
+        'button:has-text("Save and Continue")',
+      ];
+
+      let clickedNext = false;
+      for (const sel of nextSelectors) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await takeScreenshot(page, `workday-step${step + 1}-pre`);
+            await btn.click();
+            clickedNext = true;
+            stepsCompleted++;
+            console.log(`[Playwright] Workday: Clicked Next/Continue (step ${step + 1})`);
+            await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+            await stepDelay();
+            await stepDelay(); // extra wait for Workday SPA transitions
+            break;
+          }
+        } catch { /* continue */ }
+      }
+
+      // Check if we've reached the submit button
+      const submitBtn = page.locator('button[data-automation-id="bottom-navigation-next-button"]:has-text("Submit"), button:has-text("Submit Application"), button:has-text("Submit")').first();
+      if (await submitBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        console.log("[Playwright] Workday: Found Submit button");
+        await takeScreenshot(page, "workday-pre-submit");
+        await submitBtn.click();
+        console.log("[Playwright] Workday: Submit clicked");
+
+        await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+        await stepDelay();
+        await takeScreenshot(page, "workday-post-submit");
+
+        const confirmed = await checkForConfirmation(page);
+        return {
+          success: confirmed,
+          platform: "workday",
+          message: confirmed
+            ? "Application submitted and confirmed via Workday"
+            : "Application submitted via Workday (confirmation not detected)",
+        };
+      }
+
+      if (!clickedNext) {
+        // No more Next buttons and no Submit button found
+        break;
+      }
+
+      // Fill any additional fields that appear in new steps
+      await fillWorkdayStepFields(page, profile);
     }
 
+    // If we got here, we went through steps but didn't find a submit
+    await takeScreenshot(page, "workday-final");
     return {
-      success: submitted,
+      success: stepsCompleted > 0,
       platform: "workday",
-      message: submitted
-        ? "Workday application form filled and submitted/advanced"
-        : "Workday form partially filled (complex multi-step form)",
+      message: stepsCompleted > 0
+        ? `Workday: Completed ${stepsCompleted} form steps but could not find final Submit button`
+        : "Workday: Could not navigate form steps",
     };
   } catch (error) {
     return {
@@ -669,6 +1038,155 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
       message: `Workday error: ${error instanceof Error ? error.message : "Unknown"}`,
     };
   }
+}
+
+/**
+ * Handle the Workday popup dialog that appears with options like
+ * "Autofill with Resume", "Apply Manually", "Use My Last Application"
+ */
+async function handleWorkdayMethodDialog(page: Page) {
+  const applyManuallySelectors = [
+    'button:has-text("Apply Manually")',
+    'a:has-text("Apply Manually")',
+    '[data-automation-id="applyManually"]',
+    'button:has-text("Apply manually")',
+  ];
+
+  // Wait a bit for the dialog to appear
+  await page.waitForTimeout(3000);
+
+  for (const sel of applyManuallySelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
+        console.log(`[Playwright] Workday: Clicking "Apply Manually" via: ${sel}`);
+        await btn.click();
+        await stepDelay();
+        return;
+      }
+    } catch { /* continue */ }
+  }
+
+  // If "Apply Manually" not found, try other options
+  // Maybe there's "Continue" or "Start" instead
+  const altSelectors = [
+    'button:has-text("Start")',
+    'button:has-text("Continue")',
+    'button:has-text("Begin")',
+    'a:has-text("Start Application")',
+  ];
+  for (const sel of altSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        console.log(`[Playwright] Workday: Clicking alt button: ${sel}`);
+        await btn.click();
+        await stepDelay();
+        return;
+      }
+    } catch { /* continue */ }
+  }
+
+  console.log("[Playwright] Workday: No method dialog found, continuing");
+}
+
+/**
+ * Handle Workday's "Create Account" or "Sign In" page.
+ * Try to find a "Continue without account" or guest option.
+ */
+async function handleWorkdayAccountPage(page: Page, email?: string) {
+  const guestSelectors = [
+    'button:has-text("Continue as Guest")',
+    'a:has-text("Continue as Guest")',
+    'button:has-text("Apply as Guest")',
+    'a:has-text("Apply as Guest")',
+    'button:has-text("Skip")',
+    'a:has-text("Skip this step")',
+  ];
+
+  for (const sel of guestSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+        console.log(`[Playwright] Workday: Clicking guest option: ${sel}`);
+        await btn.click();
+        await stepDelay();
+        return;
+      }
+    } catch { /* continue */ }
+  }
+
+  // If no guest option, check for email-based account creation
+  // Some Workday sites let you enter email to continue
+  try {
+    const emailInput = page.locator('input[data-automation-id="email"], input[type="email"]').first();
+    if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+      console.log("[Playwright] Workday: Entering email on account page");
+      await emailInput.fill(email || "");
+      await humanDelay();
+
+      // Look for continue/next button
+      const continueBtn = page.locator('button:has-text("Continue"), button:has-text("Next"), button[type="submit"]').first();
+      if (await continueBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await continueBtn.click();
+        await stepDelay();
+      }
+    }
+  } catch { /* non-critical */ }
+}
+
+/**
+ * Fill any visible form fields in a Workday step.
+ * Used when navigating through multi-step forms.
+ */
+async function fillWorkdayStepFields(page: Page, profile: ApplicantProfile) {
+  // Check for common fields that might appear in later steps
+  // These are fields we haven't filled yet
+
+  // Source/referral question
+  try {
+    const sourceSelect = page.locator('select[data-automation-id*="source"], select[aria-label*="How did you hear"]').first();
+    if (await sourceSelect.isVisible({ timeout: 1000 }).catch(() => false)) {
+      // Select "Website" or the first non-empty option
+      const options = sourceSelect.locator("option");
+      const count = await options.count();
+      for (let i = 1; i < count; i++) {
+        const text = await options.nth(i).textContent().catch(() => "");
+        if (text && (text.toLowerCase().includes("website") || text.toLowerCase().includes("job board") || text.toLowerCase().includes("online"))) {
+          await sourceSelect.selectOption({ index: i });
+          break;
+        }
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // Resume upload (might appear in a later step)
+  if (profile.resumePath) {
+    try {
+      const fileInput = page.locator('input[type="file"]').first();
+      if (await fileInput.count() > 0) {
+        const currentFiles = await fileInput.inputValue().catch(() => "");
+        if (!currentFiles) {
+          await fileInput.setInputFiles(profile.resumePath);
+          console.log("[Playwright] Workday: Resume uploaded in later step");
+          await stepDelay();
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Required checkboxes (e.g., "I agree to terms")
+  try {
+    const checkboxes = page.locator('input[type="checkbox"][required], input[type="checkbox"][aria-required="true"]');
+    const count = await checkboxes.count();
+    for (let i = 0; i < count; i++) {
+      const isChecked = await checkboxes.nth(i).isChecked().catch(() => true);
+      if (!isChecked) {
+        await checkboxes.nth(i).check();
+        await humanDelay();
+      }
+    }
+  } catch { /* non-critical */ }
 }
 
 /* ------------------------------------------------------------------ */
@@ -699,7 +1217,7 @@ async function applySmartRecruiters(page: Page, profile: ApplicantProfile): Prom
     }
 
     // Wait for form
-    await page.waitForSelector('input[name*="firstName"], input[name*="email"], form', { timeout: 10000 }).catch(() => {});
+    await page.waitForSelector('input[name*="firstName"], input[name*="email"], form', { timeout: 15000 }).catch(() => {});
     await stepDelay();
 
     // Fill first name
@@ -708,6 +1226,7 @@ async function applySmartRecruiters(page: Page, profile: ApplicantProfile): Prom
       'input[placeholder*="First"]',
       'input[data-test="first-name"]',
     ], profile.firstName);
+    await stepDelay();
 
     // Fill last name
     await tryTypeMultiple(page, [
@@ -715,6 +1234,7 @@ async function applySmartRecruiters(page: Page, profile: ApplicantProfile): Prom
       'input[placeholder*="Last"]',
       'input[data-test="last-name"]',
     ], profile.lastName);
+    await stepDelay();
 
     // Fill email
     await tryTypeMultiple(page, [
@@ -722,6 +1242,7 @@ async function applySmartRecruiters(page: Page, profile: ApplicantProfile): Prom
       'input[name*="email"]',
       'input[data-test="email"]',
     ], profile.email);
+    await stepDelay();
 
     // Fill phone
     if (profile.phone) {
@@ -730,6 +1251,7 @@ async function applySmartRecruiters(page: Page, profile: ApplicantProfile): Prom
         'input[name*="phone"]',
         'input[data-test="phone"]',
       ], profile.phone);
+      await stepDelay();
     }
 
     // Fill location
@@ -760,7 +1282,7 @@ async function applySmartRecruiters(page: Page, profile: ApplicantProfile): Prom
     for (const sel of submitSelectors) {
       try {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
           await btn.click();
           submitted = true;
           break;
@@ -769,15 +1291,24 @@ async function applySmartRecruiters(page: Page, profile: ApplicantProfile): Prom
     }
 
     if (submitted) {
-      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      await stepDelay();
+      await takeScreenshot(page, "smartrecruiters-post-submit");
+
+      const confirmed = await checkForConfirmation(page);
+      return {
+        success: confirmed || submitted,
+        platform: "smartrecruiters",
+        message: confirmed
+          ? "Application submitted and confirmed via SmartRecruiters"
+          : "Application submitted via SmartRecruiters",
+      };
     }
 
     return {
-      success: submitted,
+      success: false,
       platform: "smartrecruiters",
-      message: submitted
-        ? "Application submitted via SmartRecruiters"
-        : "SmartRecruiters form filled but submit button not found",
+      message: "SmartRecruiters form filled but submit button not found",
     };
   } catch (error) {
     return {
@@ -796,7 +1327,7 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
   try {
     console.log("[Playwright] Handling iCIMS application");
 
-    // iCIMS typically uses iframes — look for the apply button
+    // iCIMS typically uses iframes -- look for the apply button
     const applyBtnSelectors = [
       'a:has-text("Apply Now")',
       'a:has-text("Apply")',
@@ -809,24 +1340,23 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
         const btn = page.locator(sel).first();
         if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
           await btn.click();
-          await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+          await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
           await stepDelay();
           break;
         }
       } catch { /* continue */ }
     }
 
-    // iCIMS may use iframes for forms — try main page first, then iframes
-    let formPage: Page | null = page;
+    // iCIMS may use iframes for forms -- try main page first, then iframes
+    let handledViaFrame = false;
 
     // Check for iframes
     const frames = page.frames();
     for (const frame of frames) {
       try {
         const emailInFrame = frame.locator('input[type="email"], input[name*="email"]').first();
-        if (await emailInFrame.isVisible({ timeout: 1000 }).catch(() => false)) {
-          // Found the form in an iframe — but we work with frames directly in Playwright
-          // Fill fields in this frame
+        if (await emailInFrame.isVisible({ timeout: 2000 }).catch(() => false)) {
+          // Found the form in an iframe
           await emailInFrame.fill(profile.email);
           await humanDelay();
 
@@ -834,12 +1364,14 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
           const fnInput = frame.locator('input[name*="firstName"], input[name*="first_name"], input[placeholder*="First"]').first();
           if (await fnInput.isVisible({ timeout: 1000 }).catch(() => false)) {
             await fnInput.fill(profile.firstName);
+            await humanDelay();
           }
 
           // Last name
           const lnInput = frame.locator('input[name*="lastName"], input[name*="last_name"], input[placeholder*="Last"]').first();
           if (await lnInput.isVisible({ timeout: 1000 }).catch(() => false)) {
             await lnInput.fill(profile.lastName);
+            await humanDelay();
           }
 
           // Phone
@@ -847,6 +1379,7 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
             const phoneInput = frame.locator('input[type="tel"], input[name*="phone"]').first();
             if (await phoneInput.isVisible({ timeout: 1000 }).catch(() => false)) {
               await phoneInput.fill(profile.phone);
+              await humanDelay();
             }
           }
 
@@ -855,17 +1388,18 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
             const fileInput = frame.locator('input[type="file"]').first();
             if (await fileInput.count() > 0) {
               await fileInput.setInputFiles(profile.resumePath);
+              await stepDelay();
             }
           }
 
-          formPage = null; // We handled it via frame
+          handledViaFrame = true;
           break;
         }
       } catch { /* continue to next frame */ }
     }
 
     // If not handled via frame, try main page
-    if (formPage) {
+    if (!handledViaFrame) {
       await tryTypeMultiple(page, [
         'input[name*="firstName"]',
         'input[placeholder*="First"]',
@@ -907,7 +1441,7 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
     for (const sel of submitSelectors) {
       try {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
           await btn.click();
           submitted = true;
           break;
@@ -916,15 +1450,24 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
     }
 
     if (submitted) {
-      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      await stepDelay();
+      await takeScreenshot(page, "icims-post-submit");
+
+      const confirmed = await checkForConfirmation(page);
+      return {
+        success: confirmed || submitted,
+        platform: "icims",
+        message: confirmed
+          ? "Application submitted and confirmed via iCIMS"
+          : "Application submitted via iCIMS",
+      };
     }
 
     return {
-      success: submitted,
+      success: false,
       platform: "icims",
-      message: submitted
-        ? "Application submitted via iCIMS"
-        : "iCIMS form filled but submit button not found",
+      message: "iCIMS form filled but submit button not found",
     };
   } catch (error) {
     return {
@@ -955,7 +1498,7 @@ async function applyGeneric(page: Page, profile: ApplicantProfile): Promise<Appl
         const btn = page.locator(sel).first();
         if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
           await btn.click();
-          await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+          await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
           await stepDelay();
           break;
         }
@@ -1002,6 +1545,7 @@ async function applyGeneric(page: Page, profile: ApplicantProfile): Promise<Appl
         'input[autocomplete="name"]',
       ], profile.name);
     }
+    await stepDelay();
 
     // Email
     await tryTypeMultiple(page, [
@@ -1011,6 +1555,7 @@ async function applyGeneric(page: Page, profile: ApplicantProfile): Promise<Appl
       'input[autocomplete="email"]',
       'input[placeholder*="email" i]',
     ], profile.email);
+    await stepDelay();
 
     // Phone
     if (profile.phone) {
@@ -1021,6 +1566,7 @@ async function applyGeneric(page: Page, profile: ApplicantProfile): Promise<Appl
         'input[autocomplete="tel"]',
         'input[placeholder*="phone" i]',
       ], profile.phone);
+      await stepDelay();
     }
 
     // Location
@@ -1046,6 +1592,7 @@ async function applyGeneric(page: Page, profile: ApplicantProfile): Promise<Appl
       await uploadResume(page, profile.resumePath);
     }
 
+    await scrollToBottom(page);
     await stepDelay();
     await takeScreenshot(page, "generic-pre-submit");
 
@@ -1062,7 +1609,7 @@ async function applyGeneric(page: Page, profile: ApplicantProfile): Promise<Appl
     for (const sel of submitSelectors) {
       try {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
           await btn.click();
           submitted = true;
           break;
@@ -1071,15 +1618,24 @@ async function applyGeneric(page: Page, profile: ApplicantProfile): Promise<Appl
     }
 
     if (submitted) {
-      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      await stepDelay();
+      await takeScreenshot(page, "generic-post-submit");
+
+      const confirmed = await checkForConfirmation(page);
+      return {
+        success: confirmed || submitted,
+        platform: "generic",
+        message: confirmed
+          ? "Application submitted and confirmed (generic form)"
+          : "Application submitted (generic form)",
+      };
     }
 
     return {
-      success: submitted,
+      success: false,
       platform: "generic",
-      message: submitted
-        ? "Application submitted (generic form)"
-        : "Form fields filled but submit button not found",
+      message: "Form fields filled but submit button not found",
     };
   } catch (error) {
     return {

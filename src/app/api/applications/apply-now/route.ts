@@ -74,11 +74,15 @@ export async function POST(req: Request) {
     const lastName = nameParts.slice(1).join(" ") || "";
     const resumePath = getResumeFilePath(session.user.id);
 
+    // Prefer resume/profile email over OAuth email for job applications
+    // The OAuth email (e.g. Google account) may differ from the contact email on the resume
+    const applicationEmail = userProfile?.email || user?.email || "";
+
     const profile: ApplicantProfile = {
       name: user?.name || "",
       firstName,
       lastName,
-      email: user?.email || "",
+      email: applicationEmail,
       phone: userProfile?.phone || undefined,
       location: userProfile?.location || undefined,
       linkedinUrl: userProfile?.linkedinUrl || undefined,

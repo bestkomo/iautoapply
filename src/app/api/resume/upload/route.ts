@@ -158,6 +158,7 @@ IMPORTANT: Extract EVERYTHING. For skills, be comprehensive - include programmin
   const profile = await prisma.userProfile.upsert({
     where: { userId },
     update: {
+      email: parsed.email || undefined,
       headline: parsed.headline || undefined,
       summary: parsed.summary || undefined,
       phone: parsed.phone || undefined,
@@ -168,6 +169,7 @@ IMPORTANT: Extract EVERYTHING. For skills, be comprehensive - include programmin
     },
     create: {
       userId,
+      email: parsed.email,
       headline: parsed.headline,
       summary: parsed.summary,
       phone: parsed.phone,

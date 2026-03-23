@@ -76,6 +76,7 @@ model VerificationToken {
 model UserProfile {
   id           String  @id @default(cuid())
   userId       String  @unique
+  email        String? // Contact email from resume (preferred over OAuth email for applications)
   headline     String?
   summary      String?
   phone        String?
