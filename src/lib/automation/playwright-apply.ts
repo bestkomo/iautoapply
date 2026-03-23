@@ -1364,12 +1364,33 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
 
   await takeScreenshot(page, "workday-account-filled");
 
+  // Scroll down to make Create Account button visible
+  await scrollToBottom(page);
+  await page.waitForTimeout(1000);
+
+  // Also check terms/conditions checkboxes before clicking Create Account
+  try {
+    const checkboxes = page.locator('input[type="checkbox"]');
+    const cbCount = await checkboxes.count();
+    for (let i = 0; i < cbCount; i++) {
+      const cb = checkboxes.nth(i);
+      if (!(await cb.isChecked().catch(() => false))) {
+        await cb.check().catch(() => {});
+        console.log(`[Playwright] Workday: Checked checkbox ${i}`);
+      }
+    }
+  } catch { /* non-critical */ }
+
   // Explicitly click "Create Account" button
   const createAccountSelectors = [
     'button[data-automation-id="createAccountSubmitButton"]',
     'button:has-text("Create Account")',
     'button:has-text("create account")',
     'input[type="submit"][value*="Create"]',
+    'a:has-text("Create Account")',
+    'div[role="button"]:has-text("Create Account")',
+    // Also try generic submit
+    'button[type="submit"]',
   ];
 
   let clickedAccountBtn = false;
@@ -1378,11 +1399,14 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
       const btn = page.locator(sel).first();
       if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
         console.log(`[Playwright] Workday: Clicking Create Account: ${sel}`);
+        await btn.scrollIntoViewIfNeeded().catch(() => {});
+        await page.waitForTimeout(500);
         await btn.click();
         clickedAccountBtn = true;
-        console.log("[Playwright] Workday: Create Account clicked, waiting 5s for next page to load");
+        console.log("[Playwright] Workday: Create Account clicked, waiting 8s for next page to load");
         await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-        await page.waitForTimeout(5000); // Wait 5 seconds for Workday SPA transition
+        await page.waitForTimeout(8000); // Wait 8 seconds for Workday SPA transition
+        await takeScreenshot(page, "workday-after-create-account");
         break;
       }
     } catch { /* continue */ }
