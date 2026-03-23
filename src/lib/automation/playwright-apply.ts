@@ -1105,37 +1105,66 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
     ).first();
     if (await emailInput.isVisible({ timeout: 5000 }).catch(() => false)) {
       console.log("[Playwright] Workday: Filling email for account");
+      await emailInput.click();
       await emailInput.clear();
-      await emailInput.fill(email || "");
+      await emailInput.pressSequentially(email || "", { delay: 30 });
       await humanDelay();
     }
   } catch {
     console.log("[Playwright] Workday: Could not fill email on account page");
   }
 
-  // Fill password fields
+  // Fill password fields - wait for them to render
+  await page.waitForTimeout(2000); // Workday renders fields slowly
   try {
-    const passwordInputs = page.locator(
-      'input[data-automation-id="password"], ' +
-      'input[type="password"], ' +
-      'input[aria-label*="Password"]'
-    );
-    const passwordCount = await passwordInputs.count();
+    // Try multiple approaches to find password fields
+    let passwordInputs = page.locator('input[type="password"]');
+    let passwordCount = await passwordInputs.count();
+
+    if (passwordCount === 0) {
+      // Try broader selectors
+      passwordInputs = page.locator('input[data-automation-id="password"], input[data-automation-id="verifyPassword"], input[autocomplete="new-password"], input[autocomplete="current-password"]');
+      passwordCount = await passwordInputs.count();
+    }
+
+    if (passwordCount === 0) {
+      // Last resort: find by label text
+      const pwLabel = page.locator('label:has-text("Password")');
+      const pwLabelCount = await pwLabel.count();
+      if (pwLabelCount > 0) {
+        // Click the label area and try typing
+        for (let i = 0; i < pwLabelCount; i++) {
+          const forAttr = await pwLabel.nth(i).getAttribute("for");
+          if (forAttr) {
+            const field = page.locator(`#${forAttr}`);
+            if (await field.count() > 0) {
+              await field.clear();
+              await field.pressSequentially(WORKDAY_PASSWORD, { delay: 50 });
+              await humanDelay();
+              console.log(`[Playwright] Workday: Filled password via label #${forAttr}`);
+            }
+          }
+        }
+      }
+    }
     console.log(`[Playwright] Workday: Found ${passwordCount} password field(s)`);
 
     if (passwordCount >= 2) {
       // Create Account form: Password + Verify Password
+      await passwordInputs.nth(0).click();
       await passwordInputs.nth(0).clear();
-      await passwordInputs.nth(0).fill(WORKDAY_PASSWORD);
+      await passwordInputs.nth(0).pressSequentially(WORKDAY_PASSWORD, { delay: 30 });
       await humanDelay();
+      await passwordInputs.nth(1).click();
       await passwordInputs.nth(1).clear();
-      await passwordInputs.nth(1).fill(WORKDAY_PASSWORD);
+      await passwordInputs.nth(1).pressSequentially(WORKDAY_PASSWORD, { delay: 30 });
       await humanDelay();
       console.log("[Playwright] Workday: Filled both password fields for account creation");
     } else if (passwordCount === 1) {
       // Sign In form: just one password
+      await passwordInputs.nth(0).click();
       await passwordInputs.nth(0).clear();
-      await passwordInputs.nth(0).fill(WORKDAY_PASSWORD);
+      await passwordInputs.nth(0).pressSequentially(WORKDAY_PASSWORD, { delay: 30 });
       await humanDelay();
       console.log("[Playwright] Workday: Filled password field for sign-in");
     }
