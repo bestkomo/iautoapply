@@ -1394,6 +1394,8 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
   ];
 
   let clickedAccountBtn = false;
+
+  // First try CSS selectors
   for (const sel of createAccountSelectors) {
     try {
       const btn = page.locator(sel).first();
@@ -1403,13 +1405,43 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
         await page.waitForTimeout(500);
         await btn.click();
         clickedAccountBtn = true;
-        console.log("[Playwright] Workday: Create Account clicked, waiting 8s for next page to load");
-        await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-        await page.waitForTimeout(8000); // Wait 8 seconds for Workday SPA transition
-        await takeScreenshot(page, "workday-after-create-account");
         break;
       }
     } catch { /* continue */ }
+  }
+
+  // Fallback: Use JavaScript to find and click any button with "Create Account" or "Sign In" text
+  if (!clickedAccountBtn) {
+    console.log("[Playwright] Workday: CSS selectors failed, trying JS click");
+    clickedAccountBtn = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a[role="button"]'));
+      for (const btn of buttons) {
+        const text = (btn.textContent || (btn as HTMLInputElement).value || "").toLowerCase();
+        if (text.includes("create account") || text.includes("sign in") || text.includes("submit")) {
+          (btn as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+          (btn as HTMLElement).click();
+          return true;
+        }
+      }
+      return false;
+    }).catch(() => false);
+    if (clickedAccountBtn) {
+      console.log("[Playwright] Workday: Clicked via JS evaluation");
+    }
+  }
+
+  // Ultra fallback: press Enter key which should submit the form
+  if (!clickedAccountBtn) {
+    console.log("[Playwright] Workday: Trying Enter key to submit");
+    await page.keyboard.press("Enter");
+    clickedAccountBtn = true;
+  }
+
+  if (clickedAccountBtn) {
+    console.log("[Playwright] Workday: Create Account clicked, waiting 8s for next page");
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(8000);
+    await takeScreenshot(page, "workday-after-create-account");
   }
 
   // If Create Account failed or wasn't found, try Sign In
@@ -1539,6 +1571,9 @@ async function fillWorkdayMyInformation(page: Page, profile: ApplicantProfile) {
       }
     } catch { /* non-critical */ }
 
+    // Strip phone to digits only - Workday requires numbers only (e.g. 3124874824)
+    const phoneDigits = (profile.phone || "").replace(/\D/g, "");
+    console.log(`[Playwright] Workday: Phone "${profile.phone}" => digits "${phoneDigits}"`);
     const phoneFilled = await tryTypeMultiple(page, [
       'input[data-automation-id="phone-number"]',
       'input[data-automation-id="phone"]',
@@ -1546,7 +1581,9 @@ async function fillWorkdayMyInformation(page: Page, profile: ApplicantProfile) {
       'input[type="tel"]',
       'input[aria-label*="Phone Number"]',
       'input[aria-label*="Phone"]',
-    ], profile.phone);
+      'input[placeholder*="Phone"]',
+      'input[name*="phone"]',
+    ], phoneDigits);
     console.log(`[Playwright] Workday MyInfo: Phone filled: ${phoneFilled}`);
     await humanDelay();
   }
@@ -1866,6 +1903,7 @@ async function fillWorkdayApplicationQuestions(page: Page) {
   } catch { /* non-critical */ }
 
   // Handle text inputs: fill with "N/A" if empty and required
+  // But NEVER fill phone/tel fields with "N/A" - those need real numbers
   try {
     const textInputs = page.locator(
       'input[type="text"][required], input[type="text"][aria-required="true"], ' +
@@ -1877,6 +1915,16 @@ async function fillWorkdayApplicationQuestions(page: Page) {
         const input = textInputs.nth(i);
         const currentVal = await input.inputValue().catch(() => "");
         if (!currentVal) {
+          // Check if this is a phone field - don't fill with N/A
+          const automationId = await input.getAttribute("data-automation-id").catch(() => "") || "";
+          const ariaLabel = await input.getAttribute("aria-label").catch(() => "") || "";
+          const name = await input.getAttribute("name").catch(() => "") || "";
+          const placeholder = await input.getAttribute("placeholder").catch(() => "") || "";
+          const fieldInfo = (automationId + ariaLabel + name + placeholder).toLowerCase();
+          if (fieldInfo.includes("phone") || fieldInfo.includes("tel") || fieldInfo.includes("mobile")) {
+            console.log(`[Playwright] Skipping N/A fill for phone field: ${automationId || ariaLabel || name}`);
+            continue;
+          }
           await input.fill("N/A");
           await humanDelay();
         }
