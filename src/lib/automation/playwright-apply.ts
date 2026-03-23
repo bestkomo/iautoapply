@@ -31,6 +31,8 @@ export interface ApplyResult {
 
 const SCREENSHOTS_DIR = resolve(process.cwd(), "screenshots");
 const APPLICATION_TIMEOUT = 90_000; // 90 seconds per application
+const WORKDAY_TIMEOUT = 120_000; // 120 seconds for Workday (7 steps)
+const WORKDAY_PASSWORD = "iAutoApply2024!";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -820,7 +822,10 @@ async function applyLever(page: Page, profile: ApplicantProfile): Promise<ApplyR
 
 async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<ApplyResult> {
   try {
-    console.log("[Playwright] Handling Workday application");
+    console.log("[Playwright] Handling Workday application (full 7-step flow)");
+
+    // Increase page timeout for Workday's multi-step flow
+    page.setDefaultTimeout(WORKDAY_TIMEOUT);
 
     // Step 1: Click "Apply" to start the application
     console.log("[Playwright] Workday: Looking for Apply button on job page");
@@ -836,6 +841,7 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
         if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
           console.log(`[Playwright] Workday: Clicking Apply button via: ${sel}`);
           await btn.click();
+          await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
           await stepDelay();
           await stepDelay(); // extra wait for Workday SPA loading
           break;
@@ -848,9 +854,10 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
     await handleWorkdayMethodDialog(page);
     await stepDelay();
 
-    // Step 3: Handle "Sign In" or "Create Account" pages
-    // Workday sometimes requires account creation -- try to skip or use "Continue without account"
+    // Step 3: Handle "Create Account" / "Sign In" / "Continue as Guest"
+    console.log("[Playwright] Workday: Handling account creation/sign-in");
     await handleWorkdayAccountPage(page, profile.email);
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
     await stepDelay();
 
     // Step 4: Wait for the actual application form to load
@@ -864,113 +871,95 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
     // Dismiss any popups that appeared
     await dismissPopups(page);
 
-    // Step 5: Fill the "My Information" section
-    // Workday uses data-automation-id attributes heavily
-    console.log("[Playwright] Workday: Filling personal information");
-
-    // First name
-    await tryTypeMultiple(page, [
-      'input[data-automation-id="legalNameSection_firstName"]',
-      'input[data-automation-id="firstName"]',
-      'input[aria-label*="First Name"]',
-      'input[placeholder*="First Name"]',
-    ], profile.firstName);
-    await stepDelay();
-
-    // Last name
-    await tryTypeMultiple(page, [
-      'input[data-automation-id="legalNameSection_lastName"]',
-      'input[data-automation-id="lastName"]',
-      'input[aria-label*="Last Name"]',
-      'input[placeholder*="Last Name"]',
-    ], profile.lastName);
-    await stepDelay();
-
-    // Email
-    await tryTypeMultiple(page, [
-      'input[data-automation-id="email"]',
-      'input[data-automation-id="emailAddress"]',
-      'input[type="email"]',
-      'input[aria-label*="Email"]',
-    ], profile.email);
-    await stepDelay();
-
-    // Phone (Workday often has country code + number)
-    if (profile.phone) {
-      // Try the phone device type dropdown first (set to "Mobile" or "Home")
-      try {
-        const phoneTypeSelect = page.locator('select[data-automation-id*="phone"], select[aria-label*="Phone Device Type"]').first();
-        if (await phoneTypeSelect.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await phoneTypeSelect.selectOption({ label: "Mobile" }).catch(() => {});
-          await humanDelay();
-        }
-      } catch { /* non-critical */ }
-
-      await tryTypeMultiple(page, [
-        'input[data-automation-id="phone-number"]',
-        'input[data-automation-id="phone"]',
-        'input[data-automation-id*="phoneNumber"]',
-        'input[type="tel"]',
-        'input[aria-label*="Phone Number"]',
-        'input[aria-label*="Phone"]',
-      ], profile.phone);
-      await stepDelay();
-    }
-
-    // Address / Location
-    if (profile.location) {
-      await tryTypeMultiple(page, [
-        'input[data-automation-id="addressSection_city"]',
-        'input[data-automation-id="city"]',
-        'input[aria-label*="City"]',
-        'input[placeholder*="City"]',
-      ], profile.location);
-      await stepDelay();
-    }
-
-    // Upload resume
-    if (profile.resumePath) {
-      console.log("[Playwright] Workday: Uploading resume");
-      // Workday has a specific file upload area
-      const workdayFileSelectors = [
-        'input[data-automation-id="file-upload-input-ref"]',
-        'input[data-automation-id*="resume"]',
-        'input[type="file"]',
-      ];
-      let uploaded = false;
-      for (const sel of workdayFileSelectors) {
-        try {
-          const input = page.locator(sel).first();
-          if (await input.count() > 0) {
-            await input.setInputFiles(profile.resumePath);
-            uploaded = true;
-            console.log(`[Playwright] Workday: Resume uploaded via: ${sel}`);
-            await stepDelay();
-            break;
-          }
-        } catch { /* try next */ }
-      }
-      if (!uploaded) {
-        // Fallback: generic upload
-        await uploadResume(page, profile.resumePath);
-      }
-    }
-
-    await stepDelay();
-    await takeScreenshot(page, "workday-step1");
-
-    // Step 6: Navigate through multi-step form
-    // Workday has "Next" and "Continue" buttons between steps
-    console.log("[Playwright] Workday: Navigating through form steps");
+    // Now navigate through ALL Workday steps (up to 7)
+    console.log("[Playwright] Workday: Starting multi-step form navigation");
     let stepsCompleted = 0;
-    const maxSteps = 5; // safety limit
+    const maxSteps = 10; // safety limit (7 steps + buffer)
 
     for (let step = 0; step < maxSteps; step++) {
+      await takeScreenshot(page, `workday-step${step + 1}`);
+
+      // Detect which step we're on by page content
+      const pageText = await page.textContent("body").catch(() => "") || "";
+      const pageTextLower = pageText.toLowerCase();
+
+      console.log(`[Playwright] Workday: Processing step ${step + 1}`);
+
+      // --- STEP: My Information ---
+      if (pageTextLower.includes("my information") || pageTextLower.includes("personal information") || pageTextLower.includes("contact information")) {
+        console.log("[Playwright] Workday: Filling 'My Information' step");
+        await fillWorkdayMyInformation(page, profile);
+      }
+
+      // --- STEP: My Experience (resume upload) ---
+      if (pageTextLower.includes("my experience") || pageTextLower.includes("resume") || pageTextLower.includes("work history") || pageTextLower.includes("experience")) {
+        console.log("[Playwright] Workday: Filling 'My Experience' step");
+        await fillWorkdayMyExperience(page, profile);
+      }
+
+      // --- STEP: Application Questions ---
+      if (pageTextLower.includes("application questions") || pageTextLower.includes("additional questions") || pageTextLower.includes("screening questions")) {
+        console.log("[Playwright] Workday: Filling 'Application Questions' step");
+        await fillWorkdayApplicationQuestions(page);
+      }
+
+      // --- STEP: Voluntary Disclosures ---
+      if (pageTextLower.includes("voluntary disclosures") || pageTextLower.includes("eeo") || pageTextLower.includes("equal employment")) {
+        console.log("[Playwright] Workday: Filling 'Voluntary Disclosures' step");
+        await fillWorkdayVoluntaryDisclosures(page);
+      }
+
+      // --- STEP: Self Identify (disability/veteran) ---
+      if (pageTextLower.includes("self identify") || pageTextLower.includes("disability") || pageTextLower.includes("veteran status")) {
+        console.log("[Playwright] Workday: Filling 'Self Identify' step");
+        await fillWorkdaySelfIdentify(page);
+      }
+
+      // --- STEP: Review ---
+      if (pageTextLower.includes("review") && (pageTextLower.includes("submit") || pageTextLower.includes("application"))) {
+        console.log("[Playwright] Workday: On 'Review' step");
+        await fillWorkdayReviewStep(page);
+      }
+
+      // Always try to fill any generic fields on the current step
+      await fillWorkdayStepFields(page, profile);
+
+      // Check if we've reached the Submit button
+      const submitBtn = page.locator(
+        'button[data-automation-id="bottom-navigation-next-button"]:has-text("Submit"), ' +
+        'button:has-text("Submit Application"), ' +
+        'button:has-text("Submit")'
+      ).first();
+      if (await submitBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        // Make sure it actually says "Submit" and not "Next"
+        const btnText = await submitBtn.textContent().catch(() => "") || "";
+        if (btnText.toLowerCase().includes("submit")) {
+          console.log("[Playwright] Workday: Found Submit button - submitting");
+          await takeScreenshot(page, "workday-pre-submit");
+          await submitBtn.click();
+          console.log("[Playwright] Workday: Submit clicked");
+
+          await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+          await stepDelay();
+          await takeScreenshot(page, "workday-post-submit");
+
+          const confirmed = await checkForConfirmation(page);
+          return {
+            success: confirmed,
+            platform: "workday",
+            message: confirmed
+              ? "Application submitted and confirmed via Workday"
+              : "Application submitted via Workday (confirmation not detected)",
+          };
+        }
+      }
+
+      // Try to click Next/Continue/Save and Continue
       const nextSelectors = [
         'button[data-automation-id="bottom-navigation-next-button"]',
+        'button:has-text("Save and Continue")',
         'button:has-text("Next")',
         'button:has-text("Continue")',
-        'button:has-text("Save and Continue")',
       ];
 
       let clickedNext = false;
@@ -978,12 +967,11 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
         try {
           const btn = page.locator(sel).first();
           if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
-            await takeScreenshot(page, `workday-step${step + 1}-pre`);
             await btn.click();
             clickedNext = true;
             stepsCompleted++;
             console.log(`[Playwright] Workday: Clicked Next/Continue (step ${step + 1})`);
-            await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+            await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
             await stepDelay();
             await stepDelay(); // extra wait for Workday SPA transitions
             break;
@@ -991,35 +979,10 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
         } catch { /* continue */ }
       }
 
-      // Check if we've reached the submit button
-      const submitBtn = page.locator('button[data-automation-id="bottom-navigation-next-button"]:has-text("Submit"), button:has-text("Submit Application"), button:has-text("Submit")').first();
-      if (await submitBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        console.log("[Playwright] Workday: Found Submit button");
-        await takeScreenshot(page, "workday-pre-submit");
-        await submitBtn.click();
-        console.log("[Playwright] Workday: Submit clicked");
-
-        await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-        await stepDelay();
-        await takeScreenshot(page, "workday-post-submit");
-
-        const confirmed = await checkForConfirmation(page);
-        return {
-          success: confirmed,
-          platform: "workday",
-          message: confirmed
-            ? "Application submitted and confirmed via Workday"
-            : "Application submitted via Workday (confirmation not detected)",
-        };
-      }
-
       if (!clickedNext) {
-        // No more Next buttons and no Submit button found
+        console.log("[Playwright] Workday: No Next/Submit button found, ending step loop");
         break;
       }
-
-      // Fill any additional fields that appear in new steps
-      await fillWorkdayStepFields(page, profile);
     }
 
     // If we got here, we went through steps but didn't find a submit
@@ -1092,9 +1055,10 @@ async function handleWorkdayMethodDialog(page: Page) {
 
 /**
  * Handle Workday's "Create Account" or "Sign In" page.
- * Try to find a "Continue without account" or guest option.
+ * Priority: Continue as Guest > Create Account > Sign In
  */
 async function handleWorkdayAccountPage(page: Page, email?: string) {
+  // First, try "Continue as Guest" options
   const guestSelectors = [
     'button:has-text("Continue as Guest")',
     'a:has-text("Continue as Guest")',
@@ -1116,38 +1080,687 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
     } catch { /* continue */ }
   }
 
-  // If no guest option, check for email-based account creation
-  // Some Workday sites let you enter email to continue
+  // Check if we're on the Create Account / Sign In page
+  const pageText = await page.textContent("body").catch(() => "") || "";
+  const pageTextLower = pageText.toLowerCase();
+  const isAccountPage = pageTextLower.includes("create account") ||
+    pageTextLower.includes("sign in") ||
+    pageTextLower.includes("create your account") ||
+    pageTextLower.includes("already have an account");
+
+  if (!isAccountPage) {
+    console.log("[Playwright] Workday: Not on account page, continuing");
+    return;
+  }
+
+  console.log("[Playwright] Workday: On account creation/sign-in page");
+
+  // Fill email field
   try {
-    const emailInput = page.locator('input[data-automation-id="email"], input[type="email"]').first();
-    if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-      console.log("[Playwright] Workday: Entering email on account page");
+    const emailInput = page.locator(
+      'input[data-automation-id="email"], ' +
+      'input[type="email"], ' +
+      'input[aria-label*="Email"], ' +
+      'input[placeholder*="Email"]'
+    ).first();
+    if (await emailInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+      console.log("[Playwright] Workday: Filling email for account");
+      await emailInput.clear();
       await emailInput.fill(email || "");
       await humanDelay();
+    }
+  } catch {
+    console.log("[Playwright] Workday: Could not fill email on account page");
+  }
 
-      // Look for continue/next button
-      const continueBtn = page.locator('button:has-text("Continue"), button:has-text("Next"), button[type="submit"]').first();
-      if (await continueBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await continueBtn.click();
-        await stepDelay();
+  // Fill password fields
+  try {
+    const passwordInputs = page.locator(
+      'input[data-automation-id="password"], ' +
+      'input[type="password"], ' +
+      'input[aria-label*="Password"]'
+    );
+    const passwordCount = await passwordInputs.count();
+    console.log(`[Playwright] Workday: Found ${passwordCount} password field(s)`);
+
+    if (passwordCount >= 2) {
+      // Create Account form: Password + Verify Password
+      await passwordInputs.nth(0).clear();
+      await passwordInputs.nth(0).fill(WORKDAY_PASSWORD);
+      await humanDelay();
+      await passwordInputs.nth(1).clear();
+      await passwordInputs.nth(1).fill(WORKDAY_PASSWORD);
+      await humanDelay();
+      console.log("[Playwright] Workday: Filled both password fields for account creation");
+    } else if (passwordCount === 1) {
+      // Sign In form: just one password
+      await passwordInputs.nth(0).clear();
+      await passwordInputs.nth(0).fill(WORKDAY_PASSWORD);
+      await humanDelay();
+      console.log("[Playwright] Workday: Filled password field for sign-in");
+    }
+  } catch {
+    console.log("[Playwright] Workday: Could not fill password fields");
+  }
+
+  // Check any required checkboxes (terms/conditions on account creation)
+  try {
+    const checkboxes = page.locator('input[type="checkbox"]');
+    const cbCount = await checkboxes.count();
+    for (let i = 0; i < cbCount; i++) {
+      const isChecked = await checkboxes.nth(i).isChecked().catch(() => true);
+      if (!isChecked) {
+        await checkboxes.nth(i).check().catch(() => {});
+        await humanDelay();
       }
     }
   } catch { /* non-critical */ }
+
+  await takeScreenshot(page, "workday-account-filled");
+
+  // Try to click "Create Account" button first
+  const createAccountSelectors = [
+    'button[data-automation-id="createAccountSubmitButton"]',
+    'button:has-text("Create Account")',
+    'button:has-text("Create account")',
+    'input[type="submit"][value*="Create"]',
+  ];
+
+  let clickedAccountBtn = false;
+  for (const sel of createAccountSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+        console.log(`[Playwright] Workday: Clicking Create Account: ${sel}`);
+        await btn.click();
+        clickedAccountBtn = true;
+        await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+        await stepDelay();
+        break;
+      }
+    } catch { /* continue */ }
+  }
+
+  // If Create Account failed or wasn't found, try Sign In
+  if (!clickedAccountBtn) {
+    const signInSelectors = [
+      'button[data-automation-id="signInSubmitButton"]',
+      'button:has-text("Sign In")',
+      'button:has-text("Sign in")',
+      'button:has-text("Log In")',
+      'input[type="submit"][value*="Sign"]',
+    ];
+    for (const sel of signInSelectors) {
+      try {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          console.log(`[Playwright] Workday: Clicking Sign In: ${sel}`);
+          await btn.click();
+          clickedAccountBtn = true;
+          await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+          await stepDelay();
+          break;
+        }
+      } catch { /* continue */ }
+    }
+  }
+
+  // If we clicked Create Account but got an error (account already exists), try Sign In
+  if (clickedAccountBtn) {
+    const errorText = await page.textContent("body").catch(() => "") || "";
+    const errorLower = errorText.toLowerCase();
+    if (errorLower.includes("already exists") || errorLower.includes("account already") || errorLower.includes("already registered")) {
+      console.log("[Playwright] Workday: Account already exists, trying Sign In");
+
+      // Look for "Sign In" tab or link
+      const signInLink = page.locator('a:has-text("Sign In"), button:has-text("Sign In"), [data-automation-id="signInLink"]').first();
+      if (await signInLink.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await signInLink.click();
+        await stepDelay();
+
+        // Re-fill email and password for sign-in
+        try {
+          const emailInput = page.locator('input[data-automation-id="email"], input[type="email"]').first();
+          if (await emailInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await emailInput.clear();
+            await emailInput.fill(email || "");
+            await humanDelay();
+          }
+        } catch { /* non-critical */ }
+
+        try {
+          const pwInput = page.locator('input[data-automation-id="password"], input[type="password"]').first();
+          if (await pwInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await pwInput.clear();
+            await pwInput.fill(WORKDAY_PASSWORD);
+            await humanDelay();
+          }
+        } catch { /* non-critical */ }
+
+        // Click Sign In
+        const signInBtn = page.locator('button:has-text("Sign In"), button[data-automation-id="signInSubmitButton"]').first();
+        if (await signInBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await signInBtn.click();
+          await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+          await stepDelay();
+        }
+      }
+    }
+  }
+
+  // If still nothing worked, try a generic continue/next button
+  if (!clickedAccountBtn) {
+    const continueBtn = page.locator('button:has-text("Continue"), button:has-text("Next"), button[type="submit"]').first();
+    if (await continueBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await continueBtn.click();
+      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      await stepDelay();
+    }
+  }
+
+  await takeScreenshot(page, "workday-account-complete");
 }
 
 /**
- * Fill any visible form fields in a Workday step.
- * Used when navigating through multi-step forms.
+ * Fill the "My Information" step fields.
+ */
+async function fillWorkdayMyInformation(page: Page, profile: ApplicantProfile) {
+  // First name
+  await tryTypeMultiple(page, [
+    'input[data-automation-id="legalNameSection_firstName"]',
+    'input[data-automation-id="firstName"]',
+    'input[aria-label*="First Name"]',
+    'input[placeholder*="First Name"]',
+  ], profile.firstName);
+  await humanDelay();
+
+  // Last name
+  await tryTypeMultiple(page, [
+    'input[data-automation-id="legalNameSection_lastName"]',
+    'input[data-automation-id="lastName"]',
+    'input[aria-label*="Last Name"]',
+    'input[placeholder*="Last Name"]',
+  ], profile.lastName);
+  await humanDelay();
+
+  // Email (may already be filled from account creation)
+  await tryTypeMultiple(page, [
+    'input[data-automation-id="email"]',
+    'input[data-automation-id="emailAddress"]',
+    'input[type="email"]',
+    'input[aria-label*="Email"]',
+  ], profile.email);
+  await humanDelay();
+
+  // Phone
+  if (profile.phone) {
+    // Try the phone device type dropdown first (set to "Mobile")
+    try {
+      const phoneTypeSelect = page.locator('select[data-automation-id*="phone"], select[aria-label*="Phone Device Type"]').first();
+      if (await phoneTypeSelect.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await phoneTypeSelect.selectOption({ label: "Mobile" }).catch(() => {});
+        await humanDelay();
+      }
+    } catch { /* non-critical */ }
+
+    await tryTypeMultiple(page, [
+      'input[data-automation-id="phone-number"]',
+      'input[data-automation-id="phone"]',
+      'input[data-automation-id*="phoneNumber"]',
+      'input[type="tel"]',
+      'input[aria-label*="Phone Number"]',
+      'input[aria-label*="Phone"]',
+    ], profile.phone);
+    await humanDelay();
+  }
+
+  // Address fields
+  if (profile.location) {
+    // Try to parse location into components (e.g., "City, State ZIP")
+    const locationParts = profile.location.split(",").map((s) => s.trim());
+    const city = locationParts[0] || profile.location;
+    const stateZip = locationParts[1] || "";
+    const stateZipParts = stateZip.trim().split(/\s+/);
+    const state = stateZipParts[0] || "";
+    const zip = stateZipParts[1] || "";
+
+    // Address line 1
+    await tryTypeMultiple(page, [
+      'input[data-automation-id="addressSection_addressLine1"]',
+      'input[data-automation-id="addressLine1"]',
+      'input[aria-label*="Address Line 1"]',
+    ], profile.location);
+    await humanDelay();
+
+    // City
+    await tryTypeMultiple(page, [
+      'input[data-automation-id="addressSection_city"]',
+      'input[data-automation-id="city"]',
+      'input[aria-label*="City"]',
+      'input[placeholder*="City"]',
+    ], city);
+    await humanDelay();
+
+    // State/Region
+    if (state) {
+      // Try dropdown first (Workday often uses a searchable dropdown)
+      try {
+        const stateInput = page.locator(
+          'input[data-automation-id="addressSection_countryRegion"], ' +
+          'input[data-automation-id="state"], ' +
+          'input[aria-label*="State"]'
+        ).first();
+        if (await stateInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await stateInput.clear();
+          await stateInput.fill(state);
+          await humanDelay();
+          // Click first dropdown option if it appears
+          try {
+            const option = page.locator('[data-automation-id="promptOption"], [role="option"]').first();
+            if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
+              await option.click();
+              await humanDelay();
+            }
+          } catch { /* non-critical */ }
+        }
+      } catch { /* non-critical */ }
+    }
+
+    // Zip/Postal code
+    if (zip) {
+      await tryTypeMultiple(page, [
+        'input[data-automation-id="addressSection_postalCode"]',
+        'input[data-automation-id="postalCode"]',
+        'input[aria-label*="Postal Code"]',
+        'input[aria-label*="Zip"]',
+      ], zip);
+      await humanDelay();
+    }
+  }
+
+  // Country dropdown (try to set "United States" if available)
+  try {
+    const countryInput = page.locator(
+      'input[data-automation-id="addressSection_country"], ' +
+      'input[data-automation-id="country"]'
+    ).first();
+    if (await countryInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await countryInput.clear();
+      await countryInput.fill("United States");
+      await humanDelay();
+      const option = page.locator('[data-automation-id="promptOption"], [role="option"]').first();
+      if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await option.click();
+        await humanDelay();
+      }
+    }
+  } catch { /* non-critical */ }
+
+  await takeScreenshot(page, "workday-my-information");
+}
+
+/**
+ * Fill the "My Experience" step (resume upload + work history).
+ */
+async function fillWorkdayMyExperience(page: Page, profile: ApplicantProfile) {
+  if (profile.resumePath) {
+    console.log("[Playwright] Workday: Uploading resume in My Experience step");
+    const workdayFileSelectors = [
+      'input[data-automation-id="file-upload-input-ref"]',
+      'input[data-automation-id*="resume"]',
+      'input[type="file"]',
+    ];
+    let uploaded = false;
+    for (const sel of workdayFileSelectors) {
+      try {
+        const input = page.locator(sel).first();
+        if (await input.count() > 0) {
+          await input.setInputFiles(profile.resumePath);
+          uploaded = true;
+          console.log(`[Playwright] Workday: Resume uploaded via: ${sel}`);
+          await stepDelay();
+          break;
+        }
+      } catch { /* try next */ }
+    }
+    if (!uploaded) {
+      await uploadResume(page, profile.resumePath);
+    }
+  }
+
+  // Wait for resume to process (Workday sometimes parses the resume)
+  await stepDelay();
+  await takeScreenshot(page, "workday-my-experience");
+}
+
+/**
+ * Fill the "Application Questions" step with reasonable defaults.
+ */
+async function fillWorkdayApplicationQuestions(page: Page) {
+  // Handle radio buttons: try to select "Yes" for positive questions, "No" for disqualifying ones
+  try {
+    const radioGroups = page.locator('[data-automation-id*="radio"], fieldset, [role="radiogroup"]');
+    const groupCount = await radioGroups.count();
+    for (let i = 0; i < groupCount; i++) {
+      const group = radioGroups.nth(i);
+      // Try to click "Yes" first, fallback to first option
+      const yesOption = group.locator('label:has-text("Yes"), input[value="Yes"], input[value="yes"]').first();
+      if (await yesOption.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await yesOption.click().catch(() => {});
+        await humanDelay();
+      } else {
+        // Click first radio button in the group
+        const firstRadio = group.locator('input[type="radio"]').first();
+        if (await firstRadio.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await firstRadio.click().catch(() => {});
+          await humanDelay();
+        }
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // Handle dropdowns/selects: select first non-empty option
+  try {
+    const selects = page.locator('select[data-automation-id], select[required], select[aria-required="true"]');
+    const selectCount = await selects.count();
+    for (let i = 0; i < selectCount; i++) {
+      const select = selects.nth(i);
+      try {
+        const options = select.locator("option");
+        const optCount = await options.count();
+        // Pick the first non-empty, non-placeholder option
+        for (let j = 1; j < optCount; j++) {
+          const val = await options.nth(j).getAttribute("value").catch(() => "");
+          if (val) {
+            await select.selectOption({ index: j });
+            await humanDelay();
+            break;
+          }
+        }
+      } catch { /* skip this select */ }
+    }
+  } catch { /* non-critical */ }
+
+  // Handle Workday searchable dropdowns (prompts)
+  try {
+    const promptButtons = page.locator('button[data-automation-id*="promptSearchButton"], button[aria-label*="Search"]');
+    const promptCount = await promptButtons.count();
+    for (let i = 0; i < promptCount; i++) {
+      try {
+        const btn = promptButtons.nth(i);
+        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await btn.click();
+          await humanDelay();
+          // Click first option in the dropdown
+          const option = page.locator('[data-automation-id="promptOption"], [role="option"]').first();
+          if (await option.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await option.click();
+            await humanDelay();
+          }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* non-critical */ }
+
+  // Handle text inputs: fill with "N/A" if empty and required
+  try {
+    const textInputs = page.locator(
+      'input[type="text"][required], input[type="text"][aria-required="true"], ' +
+      'textarea[required], textarea[aria-required="true"]'
+    );
+    const inputCount = await textInputs.count();
+    for (let i = 0; i < inputCount; i++) {
+      try {
+        const input = textInputs.nth(i);
+        const currentVal = await input.inputValue().catch(() => "");
+        if (!currentVal) {
+          await input.fill("N/A");
+          await humanDelay();
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* non-critical */ }
+
+  // Handle number inputs (e.g., years of experience): fill with "1"
+  try {
+    const numInputs = page.locator('input[type="number"][required], input[type="number"][aria-required="true"]');
+    const numCount = await numInputs.count();
+    for (let i = 0; i < numCount; i++) {
+      try {
+        const input = numInputs.nth(i);
+        const currentVal = await input.inputValue().catch(() => "");
+        if (!currentVal) {
+          await input.fill("1");
+          await humanDelay();
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* non-critical */ }
+
+  await takeScreenshot(page, "workday-application-questions");
+}
+
+/**
+ * Fill the "Voluntary Disclosures" step (EEO info).
+ * Select "I do not wish to answer" for all demographic questions.
+ */
+async function fillWorkdayVoluntaryDisclosures(page: Page) {
+  // Look for "I do not wish to answer" / "I don't wish to answer" / "Decline to answer" options
+  const declineLabels = [
+    "I do not wish to answer",
+    "I don't wish to answer",
+    "Decline to Self-Identify",
+    "Decline to answer",
+    "Prefer not to say",
+    "I choose not to disclose",
+    "Choose not to disclose",
+    "I Do Not Wish to Disclose",
+  ];
+
+  for (const label of declineLabels) {
+    try {
+      const options = page.locator(`label:has-text("${label}"), input[value*="${label}"]`);
+      const count = await options.count();
+      for (let i = 0; i < count; i++) {
+        try {
+          await options.nth(i).click();
+          await humanDelay();
+        } catch { /* skip */ }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Handle select dropdowns - select "I do not wish to answer" or similar
+  try {
+    const selects = page.locator("select");
+    const selectCount = await selects.count();
+    for (let i = 0; i < selectCount; i++) {
+      const select = selects.nth(i);
+      try {
+        const options = select.locator("option");
+        const optCount = await options.count();
+        let selectedDecline = false;
+        for (let j = 0; j < optCount; j++) {
+          const text = (await options.nth(j).textContent().catch(() => "")) || "";
+          const textLower = text.toLowerCase();
+          if (textLower.includes("do not wish") || textLower.includes("decline") || textLower.includes("prefer not") || textLower.includes("choose not")) {
+            await select.selectOption({ index: j });
+            selectedDecline = true;
+            await humanDelay();
+            break;
+          }
+        }
+        // If no "decline" option, select the last option (often "I do not wish to answer")
+        if (!selectedDecline && optCount > 1) {
+          await select.selectOption({ index: optCount - 1 }).catch(() => {});
+          await humanDelay();
+        }
+      } catch { /* skip this select */ }
+    }
+  } catch { /* non-critical */ }
+
+  // Handle Workday searchable prompts for EEO
+  try {
+    const promptButtons = page.locator('button[data-automation-id*="promptSearchButton"]');
+    const promptCount = await promptButtons.count();
+    for (let i = 0; i < promptCount; i++) {
+      try {
+        const btn = promptButtons.nth(i);
+        if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await btn.click();
+          await humanDelay();
+          // Look for decline option
+          const declineOption = page.locator('[data-automation-id="promptOption"]:has-text("do not wish"), [data-automation-id="promptOption"]:has-text("Decline"), [role="option"]:has-text("do not wish"), [role="option"]:has-text("Decline")').first();
+          if (await declineOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await declineOption.click();
+          } else {
+            // Click first option as fallback
+            const firstOption = page.locator('[data-automation-id="promptOption"], [role="option"]').first();
+            if (await firstOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+              await firstOption.click();
+            }
+          }
+          await humanDelay();
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* non-critical */ }
+
+  await takeScreenshot(page, "workday-voluntary-disclosures");
+}
+
+/**
+ * Fill the "Self Identify" step (disability/veteran status).
+ * Select "I do not wish to answer" or "No".
+ */
+async function fillWorkdaySelfIdentify(page: Page) {
+  // Same approach as voluntary disclosures
+  const declineLabels = [
+    "I do not wish to answer",
+    "I don't wish to answer",
+    "I DO NOT WISH TO ANSWER",
+    "No, I Don't Have a Disability",
+    "No, I don't have a disability",
+    "I am not a veteran",
+    "I am NOT a protected veteran",
+    "I am not a protected veteran",
+    "Decline to Self-Identify",
+    "Prefer not to answer",
+    "No",
+  ];
+
+  for (const label of declineLabels) {
+    try {
+      const options = page.locator(`label:has-text("${label}")`);
+      const count = await options.count();
+      for (let i = 0; i < count; i++) {
+        try {
+          const option = options.nth(i);
+          if (await option.isVisible({ timeout: 1000 }).catch(() => false)) {
+            await option.click();
+            await humanDelay();
+          }
+        } catch { /* skip */ }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Handle radio buttons
+  try {
+    const radioGroups = page.locator('fieldset, [role="radiogroup"], [data-automation-id*="radio"]');
+    const groupCount = await radioGroups.count();
+    for (let i = 0; i < groupCount; i++) {
+      const group = radioGroups.nth(i);
+      // Look for "No" or "I do not wish to answer" in the group
+      let clicked = false;
+      for (const label of ["I do not wish to answer", "I don't wish to answer", "No"]) {
+        const option = group.locator(`label:has-text("${label}"), input[value="${label}"]`).first();
+        if (await option.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await option.click().catch(() => {});
+          clicked = true;
+          await humanDelay();
+          break;
+        }
+      }
+      if (!clicked) {
+        // Select last radio option as fallback (often "decline")
+        const radios = group.locator('input[type="radio"]');
+        const radioCount = await radios.count();
+        if (radioCount > 0) {
+          await radios.nth(radioCount - 1).click().catch(() => {});
+          await humanDelay();
+        }
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // Handle select dropdowns
+  try {
+    const selects = page.locator("select");
+    const selectCount = await selects.count();
+    for (let i = 0; i < selectCount; i++) {
+      const select = selects.nth(i);
+      try {
+        const options = select.locator("option");
+        const optCount = await options.count();
+        for (let j = 0; j < optCount; j++) {
+          const text = (await options.nth(j).textContent().catch(() => "")) || "";
+          const textLower = text.toLowerCase();
+          if (textLower.includes("do not wish") || textLower.includes("decline") || textLower.includes("no,") || textLower.includes("prefer not")) {
+            await select.selectOption({ index: j });
+            await humanDelay();
+            break;
+          }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* non-critical */ }
+
+  await takeScreenshot(page, "workday-self-identify");
+}
+
+/**
+ * Handle the "Review" step: check required checkboxes and prepare for submit.
+ */
+async function fillWorkdayReviewStep(page: Page) {
+  // Check any required checkboxes (terms and conditions)
+  try {
+    const checkboxes = page.locator('input[type="checkbox"]');
+    const count = await checkboxes.count();
+    for (let i = 0; i < count; i++) {
+      const isChecked = await checkboxes.nth(i).isChecked().catch(() => true);
+      if (!isChecked) {
+        await checkboxes.nth(i).check().catch(() => {});
+        await humanDelay();
+        console.log(`[Playwright] Workday: Checked review checkbox ${i + 1}`);
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // Also check any checkboxes via labels
+  try {
+    const agreeLabels = page.locator(
+      'label:has-text("I agree"), label:has-text("I certify"), label:has-text("I acknowledge"), label:has-text("I confirm")'
+    );
+    const labelCount = await agreeLabels.count();
+    for (let i = 0; i < labelCount; i++) {
+      await agreeLabels.nth(i).click().catch(() => {});
+      await humanDelay();
+    }
+  } catch { /* non-critical */ }
+
+  await takeScreenshot(page, "workday-review");
+}
+
+/**
+ * Fill any visible form fields in a Workday step (generic fallback).
+ * Used when navigating through multi-step forms for fields not covered by specific handlers.
  */
 async function fillWorkdayStepFields(page: Page, profile: ApplicantProfile) {
-  // Check for common fields that might appear in later steps
-  // These are fields we haven't filled yet
-
   // Source/referral question
   try {
     const sourceSelect = page.locator('select[data-automation-id*="source"], select[aria-label*="How did you hear"]').first();
     if (await sourceSelect.isVisible({ timeout: 1000 }).catch(() => false)) {
-      // Select "Website" or the first non-empty option
       const options = sourceSelect.locator("option");
       const count = await options.count();
       for (let i = 1; i < count; i++) {
@@ -1183,6 +1796,20 @@ async function fillWorkdayStepFields(page: Page, profile: ApplicantProfile) {
       const isChecked = await checkboxes.nth(i).isChecked().catch(() => true);
       if (!isChecked) {
         await checkboxes.nth(i).check();
+        await humanDelay();
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // Fill any empty required text fields with "N/A"
+  try {
+    const reqInputs = page.locator('input[type="text"][required]:not([data-automation-id*="name"]):not([data-automation-id*="email"]):not([data-automation-id*="phone"])');
+    const reqCount = await reqInputs.count();
+    for (let i = 0; i < reqCount; i++) {
+      const input = reqInputs.nth(i);
+      const val = await input.inputValue().catch(() => "");
+      if (!val) {
+        await input.fill("N/A").catch(() => {});
         await humanDelay();
       }
     }
@@ -1327,24 +1954,54 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
   try {
     console.log("[Playwright] Handling iCIMS application");
 
-    // iCIMS typically uses iframes -- look for the apply button
+    // iCIMS has a specific "Apply for this job online" button that must be clicked first
     const applyBtnSelectors = [
-      'a:has-text("Apply Now")',
-      'a:has-text("Apply")',
-      'button:has-text("Apply")',
-      '.iCIMS_ApplyButton',
+      'a:has-text("Apply for this job online")',
+      'button:has-text("Apply for this job online")',
+      'a.iCIMS_ApplyButton',
       'a.iCIMS_PrimaryButton',
+      '.iCIMS_ApplyButton',
+      'a:has-text("Apply Now")',
+      'a:has-text("Apply Online")',
+      'a:has-text("Apply")',
+      'button:has-text("Apply Now")',
+      'button:has-text("Apply")',
     ];
+    let clickedApply = false;
     for (const sel of applyBtnSelectors) {
       try {
         const btn = page.locator(sel).first();
         if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          console.log(`[Playwright] iCIMS: Clicking apply button: ${sel}`);
           await btn.click();
+          clickedApply = true;
           await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
           await stepDelay();
           break;
         }
       } catch { /* continue */ }
+    }
+
+    if (!clickedApply) {
+      console.log("[Playwright] iCIMS: No apply button found, checking iframes");
+      // Also check within iframes for the apply button
+      const frames = page.frames();
+      for (const frame of frames) {
+        try {
+          for (const sel of applyBtnSelectors) {
+            const btn = frame.locator(sel).first();
+            if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+              console.log(`[Playwright] iCIMS: Clicking apply button in iframe: ${sel}`);
+              await btn.click();
+              clickedApply = true;
+              await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
+              await stepDelay();
+              break;
+            }
+          }
+          if (clickedApply) break;
+        } catch { /* continue */ }
+      }
     }
 
     // iCIMS may use iframes for forms -- try main page first, then iframes
