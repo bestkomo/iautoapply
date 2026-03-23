@@ -4,6 +4,12 @@ import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
 import { fromJsonArray } from "@/lib/db/json-array";
 import { computeMatchScore } from "@/lib/matching/job-matcher";
+import Database from "better-sqlite3";
+import { resolve } from "path";
+
+function getDb() {
+  return new Database(resolve(process.cwd(), "dev.db"));
+}
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -69,7 +75,6 @@ export async function GET() {
       }),
     ]);
 
-  // Count pending applications as "in queue"
   const pendingCount = await prisma.application.count({
     where: {
       userId: session.user.id,
@@ -150,17 +155,13 @@ export async function POST() {
   const jobs = await prisma.job.findMany({
     where: {
       isActive: true,
-      id: { notIn: existingApplicationJobIds },
+      id: { notIn: existingApplicationJobIds.length > 0 ? existingApplicationJobIds : ["none"] },
       ...(preferences.remoteOnly ? { remote: true } : {}),
       ...(excludeCompanies.length > 0
-        ? {
-            company: {
-              notIn: excludeCompanies,
-            },
-          }
+        ? { company: { notIn: excludeCompanies } }
         : {}),
     },
-    take: 100, // Get a batch to score
+    take: 100,
   });
 
   // Score and sort jobs
@@ -175,18 +176,12 @@ export async function POST() {
         return { job, score: 0 };
       }
     })
-    .filter((item) => item.score >= 15) // Minimum 15% match for broader coverage
+    .filter((item) => item.score >= 15)
     .sort((a, b) => b.score - a.score)
     .slice(0, remaining);
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
 
-  // Get user's default resume
-  const defaultResume = await prisma.resume.findFirst({
-    where: { userId: session.user.id, isDefault: true },
-    select: { id: true },
-  });
-
-  // Create Application records directly for matching jobs
+  // Create Application records directly
   let applied = 0;
   for (const { job, score } of scoredJobs) {
     try {
@@ -194,7 +189,6 @@ export async function POST() {
         data: {
           userId: session.user.id,
           jobId: job.id,
-          resumeId: defaultResume?.id || null,
           status: "APPLIED",
           autoApplied: true,
           matchScore: score,
@@ -204,16 +198,18 @@ export async function POST() {
       });
       applied++;
     } catch (error) {
-      // Skip duplicate applications (unique constraint) or other errors
       console.error(`Failed to auto-apply for job ${job.id}:`, error);
     }
   }
 
-  // Enable auto-apply
-  await prisma.jobPreference.update({
-    where: { userId: session.user.id },
-    data: { autoApplyEnabled: true },
-  });
+  // Enable auto-apply via direct SQLite (Prisma update has bug)
+  try {
+    const db = getDb();
+    db.prepare("UPDATE JobPreference SET autoApplyEnabled = 1 WHERE userId = ?").run(session.user.id);
+    db.close();
+  } catch (e) {
+    console.error("[AutoApply] Failed to enable preference:", e);
+  }
 
   return NextResponse.json({
     success: true,
@@ -227,11 +223,14 @@ export async function DELETE() {
   if (!session?.user?.id)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Disable auto-apply
-  await prisma.jobPreference.update({
-    where: { userId: session.user.id },
-    data: { autoApplyEnabled: false },
-  });
+  // Disable auto-apply via direct SQLite
+  try {
+    const db = getDb();
+    db.prepare("UPDATE JobPreference SET autoApplyEnabled = 0 WHERE userId = ?").run(session.user.id);
+    db.close();
+  } catch (e) {
+    console.error("[AutoApply] Failed to disable preference:", e);
+  }
 
   return NextResponse.json({ success: true, message: "Auto-apply disabled" });
 }

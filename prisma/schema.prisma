@@ -19,6 +19,10 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  gmailAccessToken  String?
+  gmailRefreshToken String?
+  gmailConnectedAt  DateTime?
+
   accounts     Account[]
   sessions     Session[]
   profile      UserProfile?
