@@ -1228,31 +1228,94 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
     }
   }
 
-  // Ultra last resort: find any visible text input before password fields
+  // Ultra last resort: Use JavaScript to find the email input directly in the DOM
   if (!emailFilled) {
     try {
-      console.log("[Playwright] Workday: Trying first visible text input on page");
-      const textInputs = page.locator('input[type="text"]:visible, input:not([type]):visible');
-      const count = await textInputs.count();
-      for (let i = 0; i < count; i++) {
-        const inp = textInputs.nth(i);
-        const val = await inp.inputValue().catch(() => "");
-        if (!val) { // empty input, likely the email field
-          await inp.click();
-          await page.waitForTimeout(500);
-          await inp.pressSequentially(email || "", { delay: 50 });
-          console.log(`[Playwright] Workday: Email filled via first empty text input (index ${i})`);
-          emailFilled = true;
-          break;
+      console.log("[Playwright] Workday: Trying JS DOM search for email input");
+      emailFilled = await page.evaluate((emailValue) => {
+        // Strategy 1: Find input that follows a label containing "Email"
+        const labels = document.querySelectorAll("label");
+        for (const label of labels) {
+          if (label.textContent && label.textContent.toLowerCase().includes("email")) {
+            // Check for "for" attribute
+            const forAttr = label.getAttribute("for");
+            if (forAttr) {
+              const input = document.getElementById(forAttr) as HTMLInputElement;
+              if (input) {
+                input.focus();
+                input.value = emailValue;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+                return true;
+              }
+            }
+            // Check for sibling input
+            const parent = label.parentElement;
+            if (parent) {
+              const input = parent.querySelector("input") as HTMLInputElement;
+              if (input && input.type !== "password") {
+                input.focus();
+                input.value = emailValue;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+                return true;
+              }
+            }
+            // Check next sibling
+            let next = label.nextElementSibling;
+            while (next) {
+              const input = next.tagName === "INPUT" ? next as HTMLInputElement : next.querySelector("input") as HTMLInputElement;
+              if (input && input.type !== "password") {
+                input.focus();
+                input.value = emailValue;
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.dispatchEvent(new Event("change", { bubbles: true }));
+                return true;
+              }
+              next = next.nextElementSibling;
+            }
+          }
         }
+
+        // Strategy 2: Find the first input that is NOT a password field and is empty
+        const allInputs = document.querySelectorAll("input");
+        for (const input of allInputs) {
+          const inp = input as HTMLInputElement;
+          if (inp.type !== "password" && inp.type !== "hidden" && inp.type !== "checkbox" && inp.type !== "radio" && inp.type !== "file" && inp.type !== "submit") {
+            if (!inp.value && inp.offsetParent !== null) { // visible and empty
+              inp.focus();
+              inp.value = emailValue;
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
+              inp.dispatchEvent(new Event("change", { bubbles: true }));
+              return true;
+            }
+          }
+        }
+        return false;
+      }, email || "").catch(() => false);
+
+      if (emailFilled) {
+        console.log("[Playwright] Workday: Email filled via JS DOM search");
+        await page.waitForTimeout(1000);
       }
     } catch {
-      console.log("[Playwright] Workday: First text input fallback failed");
+      console.log("[Playwright] Workday: JS DOM search failed");
     }
   }
 
   if (!emailFilled) {
     console.log("[Playwright] Workday: WARNING - Could not fill email field!");
+    // Last absolute resort: use keyboard Tab to navigate to first field and type
+    try {
+      console.log("[Playwright] Workday: Trying Tab+Type approach");
+      await page.keyboard.press("Tab");
+      await page.waitForTimeout(300);
+      await page.keyboard.type(email || "", { delay: 50 });
+      emailFilled = true;
+      console.log("[Playwright] Workday: Email typed via Tab navigation");
+    } catch {
+      console.log("[Playwright] Workday: Tab+Type approach failed");
+    }
   }
 
   // Wait 3 seconds for the page to react after email entry
