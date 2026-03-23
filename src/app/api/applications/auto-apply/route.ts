@@ -158,17 +158,34 @@ export async function POST() {
     where: {
       isActive: true,
       id: { notIn: existingApplicationJobIds.length > 0 ? existingApplicationJobIds : ["none"] },
+      applyUrl: { not: null },
       ...(preferences.remoteOnly ? { remote: true } : {}),
       ...(excludeCompanies.length > 0
         ? { company: { notIn: excludeCompanies } }
         : {}),
     },
-    take: 100,
+    take: 200,
   });
 
+  // Only keep jobs with DIRECT ATS apply URLs (not aggregator redirects)
+  const ATS_DOMAINS = [
+    "greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.com",
+    "smartrecruiters.com", "icims.com", "paylocity.com", "jobvite.com",
+    "ultipro.com", "successfactors.com", "taleo.net", "breezy.hr",
+    "ashbyhq.com", "bamboohr.com", "jazz.co", "recruiterbox.com",
+    "apply.workable.com", "jobs.lever.co", "boards.greenhouse.io",
+  ];
+
+  const directATSJobs = jobs.filter((job) => {
+    if (!job.applyUrl) return false;
+    const url = job.applyUrl.toLowerCase();
+    return ATS_DOMAINS.some((domain) => url.includes(domain));
+  });
+
+  console.log(`[AutoApply] Found ${directATSJobs.length} jobs with direct ATS URLs out of ${jobs.length} total`);
+
   // Score and sort jobs
-  console.log("[AutoApply] Scoring", jobs.length, "candidate jobs");
-  const scoredJobs = jobs
+  const scoredJobs = directATSJobs
     .map((job) => {
       try {
         const result = computeMatchScore(job, preferences);
@@ -178,7 +195,7 @@ export async function POST() {
         return { job, score: 0 };
       }
     })
-    .filter((item) => item.score >= 15)
+    .filter((item) => item.score >= 30)
     .sort((a, b) => b.score - a.score)
     .slice(0, remaining);
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
