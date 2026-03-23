@@ -55,8 +55,12 @@ export class ActiveJobsScraper extends BaseScraper {
   source = "ACTIVEJOBS";
 
   private readonly apiKey: string | undefined;
-  private readonly baseUrl =
-    "https://active-jobs-db.p.rapidapi.com/active-ats-24h";
+
+  // Two endpoints: 24h for fresh jobs, 6m for broader coverage
+  private readonly endpoints = [
+    { url: "https://active-jobs-db.p.rapidapi.com/active-ats-24h", host: "active-jobs-db.p.rapidapi.com", label: "24h" },
+    { url: "https://job-posting-feed-api.p.rapidapi.com/active-ats-6m", host: "job-posting-feed-api.p.rapidapi.com", label: "6m" },
+  ];
 
   constructor() {
     super();
@@ -69,21 +73,56 @@ export class ActiveJobsScraper extends BaseScraper {
       return [];
     }
 
+    // Query both endpoints in parallel for maximum coverage
+    const results = await Promise.allSettled(
+      this.endpoints.map((ep) => this.fetchFromEndpoint(ep, query))
+    );
+
+    const allJobs: RawJob[] = [];
+    const seenIds = new Set<string>();
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        for (const job of result.value) {
+          if (!seenIds.has(job.externalId)) {
+            seenIds.add(job.externalId);
+            allJobs.push(job);
+          }
+        }
+      }
+    }
+
+    console.log(`[ActiveJobs] Total fetched: ${allJobs.length} unique jobs from ${this.endpoints.length} endpoints`);
+    return allJobs;
+  }
+
+  private async fetchFromEndpoint(
+    endpoint: { url: string; host: string; label: string },
+    query: string
+  ): Promise<RawJob[]> {
     try {
       const params = new URLSearchParams({
-        offset: "0",
-        title_filter: `"${query}"`,
-        location_filter: `"United States"`,
         description_type: "text",
+        page_size: "50",
       });
+
+      // The 24h endpoint uses title_filter + location_filter
+      // The 6m endpoint uses title_filter
+      if (query) {
+        params.set("title_filter", `"${query}"`);
+      }
+      if (endpoint.label === "24h") {
+        params.set("location_filter", `"United States"`);
+        params.set("offset", "0");
+      }
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000);
 
-      const response = await fetch(`${this.baseUrl}?${params.toString()}`, {
+      const response = await fetch(`${endpoint.url}?${params.toString()}`, {
         headers: {
-          "x-rapidapi-host": "active-jobs-db.p.rapidapi.com",
-          "x-rapidapi-key": this.apiKey,
+          "x-rapidapi-host": endpoint.host,
+          "x-rapidapi-key": this.apiKey!,
         },
         signal: controller.signal,
       });
@@ -92,26 +131,19 @@ export class ActiveJobsScraper extends BaseScraper {
 
       if (!response.ok) {
         if (response.status === 429) {
-          console.warn("[ActiveJobs] Rate limited");
+          console.warn(`[ActiveJobs-${endpoint.label}] Rate limited`);
           return [];
         }
         if (response.status === 403) {
-          console.error(
-            "[ActiveJobs] API key invalid or subscription expired"
-          );
+          console.error(`[ActiveJobs-${endpoint.label}] API key invalid`);
           return [];
         }
-        throw new Error(`ActiveJobs API error: ${response.status}`);
+        throw new Error(`ActiveJobs-${endpoint.label} API error: ${response.status}`);
       }
 
       const data: unknown = await response.json();
-
-      // The API returns a direct array; handle error objects gracefully
       if (!Array.isArray(data)) {
-        console.error(
-          "[ActiveJobs] Unexpected response (not an array):",
-          typeof data
-        );
+        console.error(`[ActiveJobs-${endpoint.label}] Unexpected response`);
         return [];
       }
 
@@ -122,13 +154,13 @@ export class ActiveJobsScraper extends BaseScraper {
         .filter((item) => item.title && item.organization && item.url)
         .map((item) => this.mapToRawJob(item));
 
-      console.log(`[ActiveJobs] Fetched ${jobs.length} jobs`);
+      console.log(`[ActiveJobs-${endpoint.label}] Fetched ${jobs.length} jobs`);
       return jobs;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
-        console.error("[ActiveJobs] Request timed out");
+        console.error(`[ActiveJobs-${endpoint.label}] Request timed out`);
       } else {
-        console.error("[ActiveJobs] Scraping error:", error);
+        console.error(`[ActiveJobs-${endpoint.label}] Error:`, error);
       }
       return [];
     }

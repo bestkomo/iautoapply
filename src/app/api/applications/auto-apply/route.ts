@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
 import { fromJsonArray } from "@/lib/db/json-array";
 import { computeMatchScore } from "@/lib/matching/job-matcher";
+import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
+import { getResumeFilePath } from "@/lib/automation/resume-file";
 import Database from "better-sqlite3";
 import { resolve } from "path";
 
@@ -181,25 +183,85 @@ export async function POST() {
     .slice(0, remaining);
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
 
-  // Create Application records directly
+  // Fetch user profile for Playwright automation
+  const [user, userProfile] = await Promise.all([
+    prisma.user.findFirst({ where: { id: session.user.id } }),
+    prisma.userProfile.findFirst({ where: { userId: session.user.id } }),
+  ]);
+
+  const nameParts = (user?.name || "").split(" ");
+  const firstName = nameParts[0] || "";
+  const lastName = nameParts.slice(1).join(" ") || "";
+  const resumePath = getResumeFilePath(session.user.id);
+
+  const applicantProfile: ApplicantProfile = {
+    name: user?.name || "",
+    firstName,
+    lastName,
+    email: user?.email || "",
+    phone: userProfile?.phone || undefined,
+    location: userProfile?.location || undefined,
+    linkedinUrl: userProfile?.linkedinUrl || undefined,
+    portfolioUrl: userProfile?.portfolioUrl || undefined,
+    resumePath: resumePath || undefined,
+  };
+
+  // Create Application records and trigger automation
   let applied = 0;
+  const automationPromises: Promise<void>[] = [];
+
   for (const { job, score } of scoredJobs) {
     try {
-      await prisma.application.create({
+      const application = await prisma.application.create({
         data: {
           userId: session.user.id,
           jobId: job.id,
-          status: "APPLIED",
+          status: "PENDING",
           autoApplied: true,
           matchScore: score,
           appliedAt: new Date(),
-          notes: `Auto-applied with ${score}% match score`,
+          notes: `Auto-apply queued with ${score}% match score`,
         },
       });
+
+      await prisma.applicationEvent.create({
+        data: {
+          applicationId: application.id,
+          type: "AUTO_APPLY_STARTED",
+          description: `Auto-apply started for ${job.title} at ${job.company} (${score}% match)`,
+        },
+      });
+
       applied++;
+
+      // If the job has an apply URL, queue the Playwright automation
+      if (job.applyUrl) {
+        const automationTask = runAutomation(
+          application.id,
+          job.applyUrl,
+          applicantProfile,
+          job.title,
+          job.company
+        );
+        automationPromises.push(automationTask);
+      } else {
+        // No URL — just mark as applied (tracked only)
+        await prisma.application.update({
+          where: { id: application.id },
+          data: {
+            status: "APPLIED",
+            notes: `Auto-applied with ${score}% match score (no apply URL - tracked only)`,
+          },
+        });
+      }
     } catch (error) {
       console.error(`Failed to auto-apply for job ${job.id}:`, error);
     }
+  }
+
+  // Run up to 3 Playwright automations in parallel (don't block the response)
+  if (automationPromises.length > 0) {
+    runBatchAutomation(automationPromises);
   }
 
   // Enable auto-apply via direct SQLite (Prisma update has bug)
@@ -214,7 +276,7 @@ export async function POST() {
   return NextResponse.json({
     success: true,
     applied,
-    message: `Applied to ${applied} job${applied !== 1 ? "s" : ""} automatically`,
+    message: `Queued ${applied} job${applied !== 1 ? "s" : ""} for auto-apply`,
   });
 }
 
@@ -233,4 +295,73 @@ export async function DELETE() {
   }
 
   return NextResponse.json({ success: true, message: "Auto-apply disabled" });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Background automation helpers                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Run a single Playwright automation and update the DB with the result.
+ */
+async function runAutomation(
+  applicationId: string,
+  applyUrl: string,
+  profile: ApplicantProfile,
+  jobTitle: string,
+  company: string
+): Promise<void> {
+  try {
+    console.log(`[AutoApply] Running Playwright for application ${applicationId}: ${applyUrl}`);
+
+    const result = await applyToJobReal(applyUrl, profile);
+
+    console.log(`[AutoApply] Result for ${applicationId}:`, {
+      success: result.success,
+      platform: result.platform,
+      message: result.message,
+    });
+
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: {
+        status: result.success ? "APPLIED" : "PENDING",
+        notes: `${result.platform}: ${result.message}`,
+      },
+    });
+
+    await prisma.applicationEvent.create({
+      data: {
+        applicationId,
+        type: result.success ? "AUTO_APPLIED" : "AUTO_APPLY_FAILED",
+        description: result.success
+          ? `Applied to ${jobTitle} at ${company} via ${result.platform}`
+          : `Auto-apply failed for ${jobTitle} at ${company}: ${result.message}`,
+      },
+    });
+  } catch (error) {
+    console.error(`[AutoApply] Automation error for ${applicationId}:`, error);
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: {
+        status: "PENDING",
+        notes: `Automation error: ${error instanceof Error ? error.message : "Unknown"}`,
+      },
+    }).catch(() => {});
+  }
+}
+
+/**
+ * Run batches of 3 automations in parallel from the full list.
+ * This runs in the background and does not block the API response.
+ */
+async function runBatchAutomation(tasks: Promise<void>[]) {
+  const BATCH_SIZE = 3;
+
+  for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
+    const batch = tasks.slice(i, i + BATCH_SIZE);
+    await Promise.allSettled(batch);
+  }
+
+  console.log(`[AutoApply] All ${tasks.length} automation tasks completed`);
 }

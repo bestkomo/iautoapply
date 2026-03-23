@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
+import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
+import { getResumeFilePath } from "@/lib/automation/resume-file";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -37,12 +39,12 @@ export async function POST(req: Request) {
     );
   }
 
-  // Create Application record immediately (don't wait for browser automation)
+  // Create Application record immediately (PENDING status while browser automation runs)
   const application = await prisma.application.create({
     data: {
       userId: session.user.id,
       jobId,
-      status: "APPLIED",
+      status: "PENDING",
       autoApplied: true,
       notes: job.applyUrl
         ? `Apply at: ${job.applyUrl}`
@@ -50,22 +52,125 @@ export async function POST(req: Request) {
     },
   });
 
-  // Create timeline event
+  // Create initial timeline event
   await prisma.applicationEvent.create({
     data: {
       applicationId: application.id,
-      type: "AUTO_APPLIED",
-      description: `Applied to ${job.title} at ${job.company}${job.applyUrl ? ` - ${job.applyUrl}` : ""}`,
+      type: "AUTO_APPLY_STARTED",
+      description: `Auto-apply started for ${job.title} at ${job.company}`,
     },
   });
+
+  // If there's an apply URL, launch Playwright automation in the background
+  if (job.applyUrl) {
+    // Fetch user profile data for form filling
+    const [user, userProfile] = await Promise.all([
+      prisma.user.findFirst({ where: { id: session.user.id } }),
+      prisma.userProfile.findFirst({ where: { userId: session.user.id } }),
+    ]);
+
+    const nameParts = (user?.name || "").split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName = nameParts.slice(1).join(" ") || "";
+    const resumePath = getResumeFilePath(session.user.id);
+
+    const profile: ApplicantProfile = {
+      name: user?.name || "",
+      firstName,
+      lastName,
+      email: user?.email || "",
+      phone: userProfile?.phone || undefined,
+      location: userProfile?.location || undefined,
+      linkedinUrl: userProfile?.linkedinUrl || undefined,
+      portfolioUrl: userProfile?.portfolioUrl || undefined,
+      resumePath: resumePath || undefined,
+    };
+
+    // Run automation in the background (don't block the API response)
+    runAutomationInBackground(application.id, job.applyUrl, profile, job.title, job.company);
+  } else {
+    // No URL — just mark as applied (manual tracking)
+    await prisma.application.update({
+      where: { id: application.id },
+      data: { status: "APPLIED" },
+    });
+    await prisma.applicationEvent.create({
+      data: {
+        applicationId: application.id,
+        type: "AUTO_APPLIED",
+        description: `Application tracked for ${job.title} at ${job.company} (no apply URL)`,
+      },
+    });
+  }
 
   return NextResponse.json(
     {
       success: true,
       applicationId: application.id,
       applyUrl: job.applyUrl,
-      message: `Applied to ${job.title} at ${job.company}`,
+      message: job.applyUrl
+        ? `Browser automation started for ${job.title} at ${job.company}`
+        : `Applied to ${job.title} at ${job.company}`,
     },
     { status: 201 }
   );
+}
+
+/**
+ * Runs the Playwright browser automation in the background.
+ * Updates the Application record based on the result.
+ */
+async function runAutomationInBackground(
+  applicationId: string,
+  applyUrl: string,
+  profile: ApplicantProfile,
+  jobTitle: string,
+  company: string
+) {
+  try {
+    console.log(`[ApplyNow] Starting Playwright automation for application ${applicationId}`);
+
+    const result = await applyToJobReal(applyUrl, profile);
+
+    console.log(`[ApplyNow] Automation result for ${applicationId}:`, result);
+
+    // Update application status based on result
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: {
+        status: result.success ? "APPLIED" : "PENDING",
+        notes: `${result.platform}: ${result.message}${result.screenshotPath ? ` | Screenshot: ${result.screenshotPath}` : ""}`,
+      },
+    });
+
+    // Create timeline event for the result
+    await prisma.applicationEvent.create({
+      data: {
+        applicationId,
+        type: result.success ? "AUTO_APPLIED" : "AUTO_APPLY_FAILED",
+        description: result.success
+          ? `Successfully applied to ${jobTitle} at ${company} via ${result.platform}`
+          : `Auto-apply failed for ${jobTitle} at ${company}: ${result.message}`,
+      },
+    });
+  } catch (error) {
+    console.error(`[ApplyNow] Background automation error for ${applicationId}:`, error);
+
+    // Update as failed
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: {
+        status: "PENDING",
+        notes: `Automation error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      },
+    }).catch(() => {});
+
+    await prisma.applicationEvent.create({
+      data: {
+        applicationId,
+        type: "AUTO_APPLY_FAILED",
+        description: `Auto-apply crashed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      },
+    }).catch(() => {});
+  }
 }

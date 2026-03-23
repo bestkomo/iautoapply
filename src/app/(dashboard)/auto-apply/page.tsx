@@ -86,8 +86,8 @@ interface AutoApplyStatus {
 
 const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   PENDING: {
-    label: "Pending",
-    className: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+    label: "Automating...",
+    className: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
   },
   APPLIED: {
     label: "Applied",
@@ -314,7 +314,16 @@ export default function AutoApplyPage() {
       if (status.enabled) {
         await fetch("/api/applications/auto-apply", { method: "DELETE" });
       } else {
-        await fetch("/api/applications/auto-apply", { method: "POST" });
+        const res = await fetch("/api/applications/auto-apply", { method: "POST" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.applied > 0) {
+            // Trigger a refresh after a delay to show updated automation results
+            setTimeout(() => fetchStatus(), 5000);
+            setTimeout(() => fetchStatus(), 15000);
+            setTimeout(() => fetchStatus(), 30000);
+          }
+        }
       }
       await fetchStatus();
     } finally {

@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
 import { getProviderForFeature } from "@/lib/ai/provider";
 import { toJsonArray } from "@/lib/db/json-array";
+import { saveResumeFile } from "@/lib/automation/resume-file";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -299,6 +300,15 @@ IMPORTANT: Extract EVERYTHING. For skills, be comprehensive - include programmin
       desiredLocations: toJsonArray(parsed.location ? [parsed.location] : []),
     },
   });
+
+  // Save the resume file to disk so Playwright can upload it when auto-applying
+  try {
+    await saveResumeFile(userId, buffer, file.name);
+    console.log("[Upload] Resume file saved to disk for Playwright automation");
+  } catch (saveErr) {
+    console.error("[Upload] Failed to save resume file to disk:", saveErr);
+    // Non-critical: don't fail the whole upload if file save fails
+  }
 
   return NextResponse.json({
     success: true,
