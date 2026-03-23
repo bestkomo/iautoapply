@@ -364,16 +364,22 @@ export default function UploadResumePage() {
         // Move to "Searching for matching jobs..." step
         setCurrentStep(3);
 
-        // Trigger job scraping based on desired titles
-        const found = await scrapeJobsForTitles(parsed.desiredTitles);
-        setJobsFound(found);
+        // Trigger job scraping (non-blocking - don't fail upload if scraping fails)
+        try {
+          const found = await scrapeJobsForTitles(parsed.desiredTitles);
+          setJobsFound(found);
+        } catch {
+          // Scraping failed but upload succeeded - show existing job count
+          setJobsFound(0);
+        }
 
         // Complete
         setCurrentStep(4);
         setResult(parsed);
         setIsUploading(false);
-      } catch {
+      } catch (err) {
         clearInterval(stepTimer);
+        console.error("Upload error:", err);
         setError("Something went wrong. Please try again.");
         setIsUploading(false);
         setCurrentStep(-1);
