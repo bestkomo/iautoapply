@@ -439,6 +439,69 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
     // Check for required select dropdowns that are not filled
     await fillRequiredSelectsWithFirstOption(page);
 
+    // Handle Greenhouse-specific custom dropdowns (React Select with "Select..." text)
+    // These are used for EEO/Disability/Veteran questions
+    try {
+      // Fill ALL native select elements (not just required ones)
+      const allSelects = page.locator('select');
+      const selectCount = await allSelects.count();
+      console.log(`[Playwright] Greenhouse: Found ${selectCount} total select elements`);
+      for (let i = 0; i < selectCount; i++) {
+        const sel = allSelects.nth(i);
+        const currentVal = await sel.inputValue().catch(() => "");
+        if (!currentVal || currentVal === "") {
+          const options = sel.locator("option");
+          const optCount = await options.count();
+          // Try to find "I do not wish to answer" or "Decline" option first
+          let selectedDecline = false;
+          for (let j = 0; j < optCount; j++) {
+            const text = await options.nth(j).textContent().catch(() => "");
+            if (text && (text.toLowerCase().includes("decline") || text.toLowerCase().includes("do not wish") || text.toLowerCase().includes("prefer not"))) {
+              await sel.selectOption({ index: j });
+              selectedDecline = true;
+              console.log(`[Playwright] Greenhouse: Selected "${text}" for dropdown ${i}`);
+              break;
+            }
+          }
+          if (!selectedDecline && optCount > 1) {
+            // Select first non-empty option
+            await sel.selectOption({ index: 1 });
+            const chosen = await options.nth(1).textContent().catch(() => "option 1");
+            console.log(`[Playwright] Greenhouse: Selected first option "${chosen}" for dropdown ${i}`);
+          }
+        }
+      }
+
+      // Also handle React Select custom dropdowns (they show "Select..." as placeholder)
+      const reactSelects = page.locator('[class*="select__placeholder"]:has-text("Select"), [class*="Select__placeholder"]:has-text("Select")');
+      const reactSelectCount = await reactSelects.count();
+      if (reactSelectCount > 0) {
+        console.log(`[Playwright] Greenhouse: Found ${reactSelectCount} React Select dropdowns`);
+        for (let i = 0; i < reactSelectCount; i++) {
+          try {
+            await reactSelects.nth(i).click();
+            await page.waitForTimeout(500);
+            // Try clicking "I do not wish to answer" or first option
+            const declineOpt = page.locator('[class*="select__option"]:has-text("decline"), [class*="select__option"]:has-text("do not wish"), [class*="select__option"]:has-text("prefer not")').first();
+            if (await declineOpt.isVisible({ timeout: 1000 }).catch(() => false)) {
+              await declineOpt.click();
+            } else {
+              // Just pick the first option
+              const firstOpt = page.locator('[class*="select__option"]').first();
+              if (await firstOpt.isVisible({ timeout: 1000 }).catch(() => false)) {
+                await firstOpt.click();
+              }
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (e) {
+      console.log("[Playwright] Greenhouse: Error filling dropdowns:", e);
+    }
+
+    await scrollToBottom(page);
+    await page.waitForTimeout(1000);
+
     // Take pre-submit screenshot
     await takeScreenshot(page, "greenhouse-pre-submit");
 
@@ -1104,24 +1167,92 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
 
   console.log("[Playwright] Workday: On account creation/sign-in page");
 
-  // Fill email field
-  try {
-    const emailInput = page.locator(
-      'input[data-automation-id="email"], ' +
-      'input[type="email"], ' +
-      'input[aria-label*="Email"], ' +
-      'input[placeholder*="Email"]'
-    ).first();
-    if (await emailInput.isVisible({ timeout: 5000 }).catch(() => false)) {
-      console.log("[Playwright] Workday: Filling email for account");
-      await emailInput.click();
-      await emailInput.clear();
-      await emailInput.pressSequentially(email || "", { delay: 30 });
-      await humanDelay();
-      console.log(`[Playwright] Workday: Email filled with: ${email}`);
+  // Fill email field - try many approaches since Workday uses different selectors per site
+  let emailFilled = false;
+  const emailSelectors = [
+    'input[data-automation-id="email"]',
+    'input[data-automation-id="emailAddress"]',
+    'input[data-automation-id="createAccount-email"]',
+    'input[type="email"]',
+    'input[aria-label*="Email"]',
+    'input[aria-label*="email"]',
+    'input[placeholder*="Email"]',
+    'input[placeholder*="email"]',
+    'input[name*="email"]',
+    'input[name*="Email"]',
+    'input[id*="email"]',
+    'input[id*="Email"]',
+  ];
+
+  for (const sel of emailSelectors) {
+    try {
+      const input = page.locator(sel).first();
+      if (await input.isVisible({ timeout: 2000 }).catch(() => false)) {
+        console.log(`[Playwright] Workday: Found email field with selector: ${sel}`);
+        await input.click();
+        await page.waitForTimeout(500);
+        await input.clear();
+        await page.waitForTimeout(300);
+        await input.pressSequentially(email || "", { delay: 50 });
+        await humanDelay();
+        console.log(`[Playwright] Workday: Email filled with: ${email}`);
+        emailFilled = true;
+        break;
+      }
+    } catch { /* try next selector */ }
+  }
+
+  // Last resort: find input by label text "Email Address"
+  if (!emailFilled) {
+    try {
+      console.log("[Playwright] Workday: Trying to find email by label text");
+      const labels = page.locator('label:has-text("Email")');
+      const count = await labels.count();
+      for (let i = 0; i < count; i++) {
+        const forAttr = await labels.nth(i).getAttribute("for");
+        if (forAttr) {
+          const field = page.locator(`#${forAttr}`);
+          if (await field.isVisible().catch(() => false)) {
+            await field.click();
+            await page.waitForTimeout(500);
+            await field.clear();
+            await field.pressSequentially(email || "", { delay: 50 });
+            console.log(`[Playwright] Workday: Email filled via label for="${forAttr}"`);
+            emailFilled = true;
+            break;
+          }
+        }
+      }
+    } catch {
+      console.log("[Playwright] Workday: Label-based email search failed");
     }
-  } catch {
-    console.log("[Playwright] Workday: Could not fill email on account page");
+  }
+
+  // Ultra last resort: find any visible text input before password fields
+  if (!emailFilled) {
+    try {
+      console.log("[Playwright] Workday: Trying first visible text input on page");
+      const textInputs = page.locator('input[type="text"]:visible, input:not([type]):visible');
+      const count = await textInputs.count();
+      for (let i = 0; i < count; i++) {
+        const inp = textInputs.nth(i);
+        const val = await inp.inputValue().catch(() => "");
+        if (!val) { // empty input, likely the email field
+          await inp.click();
+          await page.waitForTimeout(500);
+          await inp.pressSequentially(email || "", { delay: 50 });
+          console.log(`[Playwright] Workday: Email filled via first empty text input (index ${i})`);
+          emailFilled = true;
+          break;
+        }
+      }
+    } catch {
+      console.log("[Playwright] Workday: First text input fallback failed");
+    }
+  }
+
+  if (!emailFilled) {
+    console.log("[Playwright] Workday: WARNING - Could not fill email field!");
   }
 
   // Wait 3 seconds for the page to react after email entry
