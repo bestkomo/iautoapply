@@ -211,11 +211,15 @@ export async function POST() {
   const lastName = nameParts.slice(1).join(" ") || "";
   const resumePath = getResumeFilePath(session.user.id);
 
+  // Prefer resume/profile email over OAuth email for job applications
+  // The OAuth email (e.g. Google account) may differ from the contact email on the resume
+  const applicationEmail = userProfile?.email || user?.email || "";
+
   const applicantProfile: ApplicantProfile = {
     name: user?.name || "",
     firstName,
     lastName,
-    email: user?.email || "",
+    email: applicationEmail,
     phone: userProfile?.phone || undefined,
     location: userProfile?.location || undefined,
     linkedinUrl: userProfile?.linkedinUrl || undefined,
@@ -373,7 +377,7 @@ async function runAutomation(
  * This runs in the background and does not block the API response.
  */
 async function runBatchAutomation(tasks: Promise<void>[]) {
-  const BATCH_SIZE = 3;
+  const BATCH_SIZE = 1; // Run 1 at a time for easier debugging
 
   for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
     const batch = tasks.slice(i, i + BATCH_SIZE);
