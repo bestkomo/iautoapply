@@ -6,6 +6,7 @@ import { fromJsonArray } from "@/lib/db/json-array";
 import { computeMatchScore } from "@/lib/matching/job-matcher";
 import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { getResumeFilePath } from "@/lib/automation/resume-file";
+import { canAutoApply } from "@/lib/stripe/check-subscription";
 import Database from "better-sqlite3";
 import { resolve } from "path";
 
@@ -113,6 +114,19 @@ export async function POST() {
   if (!session?.user?.id)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Check subscription limits
+  const { allowed, remaining: subRemaining, plan } = await canAutoApply(session.user.id);
+  if (!allowed) {
+    return NextResponse.json(
+      {
+        error: "Daily limit reached. Upgrade to Pro for more.",
+        remaining: 0,
+        plan,
+      },
+      { status: 429 }
+    );
+  }
+
   const preferences = await prisma.jobPreference.findFirst({
     where: { userId: session.user.id },
   });
@@ -124,7 +138,7 @@ export async function POST() {
     );
   }
 
-  // Count today's applications to respect limit
+  // Use the lower of subscription limit remaining and preference limit
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
@@ -136,10 +150,11 @@ export async function POST() {
     },
   });
 
-  const remaining = preferences.maxAutoApplyDay - appliedToday;
+  const prefRemaining = preferences.maxAutoApplyDay - appliedToday;
+  const remaining = Math.min(subRemaining, Math.max(0, prefRemaining));
   if (remaining <= 0) {
     return NextResponse.json(
-      { error: "Daily auto-apply limit reached" },
+      { error: "Daily auto-apply limit reached", remaining: 0, plan },
       { status: 429 }
     );
   }

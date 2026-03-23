@@ -24,6 +24,7 @@ import {
   Check,
   Crown,
   Sparkles,
+  Zap,
 } from "lucide-react";
 
 interface UserProfile {
@@ -53,37 +54,40 @@ const PROVIDERS = [
 
 const PLAN_DETAILS: Record<
   string,
-  { label: string; color: string; features: string[] }
+  { label: string; color: string; price: number; features: string[] }
 > = {
   FREE: {
     label: "Free",
     color: "bg-muted text-muted-foreground",
+    price: 0,
     features: [
-      "5 AI generations per day",
-      "1 resume",
-      "Basic job search",
+      "5 auto-applies/day",
+      "Job search",
+      "Resume upload",
     ],
   },
   PRO: {
     label: "Pro",
     color: "bg-primary text-primary-foreground",
+    price: 29,
     features: [
-      "Unlimited AI generations",
-      "Unlimited resumes",
-      "Auto-apply",
-      "Interview coaching",
-      "Priority support",
+      "50 auto-applies/day",
+      "Priority job matching",
+      "Gmail inbox integration",
+      "All ATS platforms",
+      "Email support",
     ],
   },
   ENTERPRISE: {
     label: "Enterprise",
     color: "bg-amber-500 text-white",
+    price: 49,
     features: [
+      "200 auto-applies/day",
       "Everything in Pro",
-      "Team management",
-      "Custom AI models",
-      "API access",
+      "Custom email domain",
       "Dedicated support",
+      "API access",
     ],
   },
 };
@@ -103,6 +107,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [upgrading, setUpgrading] = useState<string | null>(null);
+  const [managingBilling, setManagingBilling] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -130,6 +136,23 @@ export default function SettingsPage() {
       setLoading(false);
     }
     load();
+  }, []);
+
+  // Check for payment status in URL params
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const payment = params.get("payment");
+    if (payment === "success") {
+      // Reload subscription data after successful payment
+      fetch("/api/profile")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.subscription) setSubscription(data.subscription);
+        })
+        .catch(() => {});
+      // Clean URL
+      window.history.replaceState({}, "", "/settings");
+    }
   }, []);
 
   const saveProfile = useCallback(async () => {
@@ -167,6 +190,46 @@ export default function SettingsPage() {
       setSaving(null);
     }
   }, [aiPreferences]);
+
+  const handleUpgrade = async (plan: "PRO" | "ENTERPRISE") => {
+    setUpgrading(plan);
+    try {
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error("No checkout URL returned");
+      }
+    } catch (error) {
+      console.error("Failed to create checkout session:", error);
+    } finally {
+      setUpgrading(null);
+    }
+  };
+
+  const handleManageBilling = async () => {
+    setManagingBilling(true);
+    try {
+      const res = await fetch("/api/stripe/portal", {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error("No portal URL returned");
+      }
+    } catch (error) {
+      console.error("Failed to open billing portal:", error);
+    } finally {
+      setManagingBilling(false);
+    }
+  };
 
   const planInfo = PLAN_DETAILS[subscription.plan] || PLAN_DETAILS.FREE;
 
@@ -334,18 +397,28 @@ export default function SettingsPage() {
                 )}
               </div>
             </div>
-            {subscription.plan === "FREE" && (
-              <Button size="sm">
-                <Crown className="mr-1 h-4 w-4" />
-                Upgrade to Pro
+            {subscription.plan !== "FREE" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleManageBilling}
+                disabled={managingBilling}
+              >
+                {managingBilling ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <CreditCard className="mr-1 h-4 w-4" />
+                )}
+                Manage Billing
               </Button>
             )}
           </div>
 
           <Separator />
 
+          {/* Plan features for current plan */}
           <div>
-            <p className="text-sm font-medium mb-2">Plan Features</p>
+            <p className="text-sm font-medium mb-2">Your Plan Features</p>
             <ul className="space-y-1.5">
               {planInfo.features.map((feature, i) => (
                 <li
@@ -358,6 +431,117 @@ export default function SettingsPage() {
               ))}
             </ul>
           </div>
+
+          {/* Upgrade options for FREE users */}
+          {subscription.plan === "FREE" && (
+            <>
+              <Separator />
+              <div>
+                <p className="text-sm font-medium mb-3">Upgrade Your Plan</p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {/* Pro Plan */}
+                  <div className="rounded-lg border-2 border-primary p-4 relative">
+                    <div className="absolute -top-2.5 left-3">
+                      <Badge className="bg-primary text-primary-foreground border-0 text-xs">
+                        Most Popular
+                      </Badge>
+                    </div>
+                    <div className="mt-1">
+                      <h4 className="font-semibold flex items-center gap-1">
+                        <Crown className="h-4 w-4" />
+                        Pro
+                      </h4>
+                      <p className="text-2xl font-bold mt-1">
+                        $29<span className="text-sm font-normal text-muted-foreground">/mo</span>
+                      </p>
+                      <ul className="mt-3 space-y-1.5">
+                        {PLAN_DETAILS.PRO.features.map((f, i) => (
+                          <li key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Check className="h-3 w-3 text-green-500 shrink-0" />
+                            {f}
+                          </li>
+                        ))}
+                      </ul>
+                      <Button
+                        className="w-full mt-3"
+                        size="sm"
+                        onClick={() => handleUpgrade("PRO")}
+                        disabled={upgrading === "PRO"}
+                      >
+                        {upgrading === "PRO" ? (
+                          <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Zap className="mr-1 h-4 w-4" />
+                        )}
+                        Upgrade to Pro
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Enterprise Plan */}
+                  <div className="rounded-lg border p-4">
+                    <h4 className="font-semibold flex items-center gap-1">
+                      <Sparkles className="h-4 w-4" />
+                      Enterprise
+                    </h4>
+                    <p className="text-2xl font-bold mt-1">
+                      $49<span className="text-sm font-normal text-muted-foreground">/mo</span>
+                    </p>
+                    <ul className="mt-3 space-y-1.5">
+                      {PLAN_DETAILS.ENTERPRISE.features.map((f, i) => (
+                        <li key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Check className="h-3 w-3 text-green-500 shrink-0" />
+                          {f}
+                        </li>
+                      ))}
+                    </ul>
+                    <Button
+                      className="w-full mt-3"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleUpgrade("ENTERPRISE")}
+                      disabled={upgrading === "ENTERPRISE"}
+                    >
+                      {upgrading === "ENTERPRISE" ? (
+                        <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-1 h-4 w-4" />
+                      )}
+                      Upgrade to Enterprise
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Upgrade option for PRO users to Enterprise */}
+          {subscription.plan === "PRO" && (
+            <>
+              <Separator />
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div>
+                  <p className="text-sm font-medium">Need more?</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Upgrade to Enterprise for 200 auto-applies/day, API access, and dedicated support.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleUpgrade("ENTERPRISE")}
+                  disabled={upgrading === "ENTERPRISE"}
+                >
+                  {upgrading === "ENTERPRISE" ? (
+                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="mr-1 h-4 w-4" />
+                  )}
+                  $49/mo
+                </Button>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 
