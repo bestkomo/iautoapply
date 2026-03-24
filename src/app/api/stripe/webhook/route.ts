@@ -1,14 +1,9 @@
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe/stripe";
-import Database from "better-sqlite3";
-import { resolve } from "path";
+import { prisma } from "@/lib/db/prisma";
 import Stripe from "stripe";
 
 export const runtime = "nodejs";
-
-function getDb() {
-  return new Database(resolve(process.cwd(), "prisma", "dev.db"));
-}
 
 export async function POST(req: Request) {
   const body = await req.text();
@@ -37,8 +32,6 @@ export async function POST(req: Request) {
     );
   }
 
-  const db = getDb();
-
   try {
     switch (event.type) {
       case "checkout.session.completed": {
@@ -57,34 +50,25 @@ export async function POST(req: Request) {
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const currentPeriodEnd = new Date(
           subscription.current_period_end * 1000
-        ).toISOString();
+        );
 
         // Upsert subscription record
-        const existing = db
-          .prepare("SELECT id FROM Subscription WHERE userId = ?")
-          .get(userId) as { id: string } | undefined;
-
-        if (existing) {
-          db.prepare(
-            `UPDATE Subscription
-             SET plan = ?, stripeCustomerId = ?, stripeSubId = ?, currentPeriodEnd = ?
-             WHERE userId = ?`
-          ).run(plan, customerId, subscriptionId, currentPeriodEnd, userId);
-        } else {
-          const id = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-          db.prepare(
-            `INSERT INTO Subscription (id, userId, plan, stripeCustomerId, stripeSubId, currentPeriodEnd, createdAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
-          ).run(
-            id,
+        await prisma.subscription.upsert({
+          where: { userId },
+          update: {
+            plan,
+            stripeCustomerId: customerId,
+            stripeSubId: subscriptionId,
+            currentPeriodEnd,
+          },
+          create: {
             userId,
             plan,
-            customerId,
-            subscriptionId,
+            stripeCustomerId: customerId,
+            stripeSubId: subscriptionId,
             currentPeriodEnd,
-            new Date().toISOString()
-          );
-        }
+          },
+        });
 
         console.log(
           `[Stripe Webhook] checkout.session.completed: userId=${userId}, plan=${plan}`
@@ -102,11 +86,12 @@ export async function POST(req: Request) {
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const currentPeriodEnd = new Date(
           subscription.current_period_end * 1000
-        ).toISOString();
+        );
 
-        db.prepare(
-          `UPDATE Subscription SET currentPeriodEnd = ? WHERE stripeSubId = ?`
-        ).run(currentPeriodEnd, subscriptionId);
+        await prisma.subscription.updateMany({
+          where: { stripeSubId: subscriptionId },
+          data: { currentPeriodEnd },
+        });
 
         console.log(
           `[Stripe Webhook] invoice.payment_succeeded: subId=${subscriptionId}`
@@ -118,9 +103,14 @@ export async function POST(req: Request) {
         const subscription = event.data.object as Stripe.Subscription;
         const subscriptionId = subscription.id;
 
-        db.prepare(
-          `UPDATE Subscription SET plan = 'FREE', stripeSubId = NULL, currentPeriodEnd = NULL WHERE stripeSubId = ?`
-        ).run(subscriptionId);
+        await prisma.subscription.updateMany({
+          where: { stripeSubId: subscriptionId },
+          data: {
+            plan: "FREE",
+            stripeSubId: null,
+            currentPeriodEnd: null,
+          },
+        });
 
         console.log(
           `[Stripe Webhook] customer.subscription.deleted: subId=${subscriptionId}`
@@ -133,13 +123,11 @@ export async function POST(req: Request) {
     }
   } catch (error) {
     console.error("[Stripe Webhook] Error processing event:", error);
-    db.close();
     return NextResponse.json(
       { error: "Webhook handler failed" },
       { status: 500 }
     );
   }
 
-  db.close();
   return NextResponse.json({ received: true });
 }

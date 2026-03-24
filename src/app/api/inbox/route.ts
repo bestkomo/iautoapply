@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/auth-options";
-import Database from "better-sqlite3";
-import { resolve } from "path";
+import { prisma } from "@/lib/db/prisma";
 import {
   fetchApplicationEmails,
   type ParsedEmail,
@@ -61,13 +60,10 @@ export async function GET() {
   const items: InboxItem[] = [];
 
   // Get user's Gmail token from database
-  const db = new Database(resolve(process.cwd(), "dev.db"));
-  const user = db.prepare(
-    "SELECT gmailAccessToken, gmailRefreshToken FROM User WHERE id = ?"
-  ).get(userId) as {
-    gmailAccessToken: string | null;
-    gmailRefreshToken: string | null;
-  } | undefined;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { gmailAccessToken: true, gmailRefreshToken: true },
+  });
 
   let gmailConnected = false;
 
@@ -103,38 +99,29 @@ export async function GET() {
   }
 
   // Get application status updates
-  const applications = db.prepare(`
-    SELECT
-      a.id, a.status, a.appliedAt, a.respondedAt,
-      j.title, j.company
-    FROM Application a
-    JOIN Job j ON a.jobId = j.id
-    WHERE a.userId = ?
-    ORDER BY a.appliedAt DESC
-    LIMIT 50
-  `).all(userId) as Array<{
-    id: string;
-    status: string;
-    appliedAt: string;
-    respondedAt: string | null;
-    title: string;
-    company: string;
-  }>;
+  const applications = await prisma.application.findMany({
+    where: { userId },
+    include: {
+      job: {
+        select: { title: true, company: true },
+      },
+    },
+    orderBy: { appliedAt: "desc" },
+    take: 50,
+  });
 
   for (const app of applications) {
     items.push({
       id: `app-${app.id}`,
-      from: app.company,
-      subject: `Application: ${app.title} at ${app.company}`,
-      date: app.respondedAt || app.appliedAt,
-      preview: `Your application for ${app.title} is currently ${app.status.toLowerCase().replace(/_/g, " ")}`,
+      from: app.job.company,
+      subject: `Application: ${app.job.title} at ${app.job.company}`,
+      date: (app.respondedAt || app.appliedAt).toISOString(),
+      preview: `Your application for ${app.job.title} is currently ${app.status.toLowerCase().replace(/_/g, " ")}`,
       status: mapApplicationStatus(app.status),
-      company: app.company,
+      company: app.job.company,
       source: "application",
     });
   }
-
-  db.close();
 
   // Sort all items by date (newest first)
   items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import Database from "better-sqlite3";
-import { resolve } from "path";
+import { prisma } from "@/lib/db/prisma";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -55,17 +54,15 @@ export async function GET(req: Request) {
     const accessToken = tokens.access_token as string;
     const refreshToken = (tokens.refresh_token as string) || null;
 
-    // Store tokens in database using better-sqlite3 directly
-    const db = new Database(resolve(process.cwd(), "dev.db"));
-    db.prepare(
-      "UPDATE User SET gmailAccessToken = ?, gmailRefreshToken = ?, gmailConnectedAt = ? WHERE id = ?"
-    ).run(
-      accessToken,
-      refreshToken,
-      new Date().toISOString(),
-      userId
-    );
-    db.close();
+    // Store tokens in database using Prisma
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        gmailAccessToken: accessToken,
+        gmailRefreshToken: refreshToken,
+        gmailConnectedAt: new Date(),
+      },
+    });
 
     return NextResponse.redirect(
       new URL("/inbox?gmail=connected", "http://localhost:3001")

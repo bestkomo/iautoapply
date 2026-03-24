@@ -7,12 +7,6 @@ import { computeMatchScore } from "@/lib/matching/job-matcher";
 import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { getResumeFilePath } from "@/lib/automation/resume-file";
 import { canAutoApply } from "@/lib/stripe/check-subscription";
-import Database from "better-sqlite3";
-import { resolve } from "path";
-
-function getDb() {
-  return new Database(resolve(process.cwd(), "dev.db"));
-}
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -300,11 +294,12 @@ export async function POST() {
     runBatchAutomation(automationPromises);
   }
 
-  // Enable auto-apply via direct SQLite (Prisma update has bug)
+  // Enable auto-apply preference
   try {
-    const db = getDb();
-    db.prepare("UPDATE JobPreference SET autoApplyEnabled = 1 WHERE userId = ?").run(session.user.id);
-    db.close();
+    await prisma.jobPreference.updateMany({
+      where: { userId: session.user.id },
+      data: { autoApplyEnabled: true },
+    });
   } catch (e) {
     console.error("[AutoApply] Failed to enable preference:", e);
   }
@@ -321,11 +316,12 @@ export async function DELETE() {
   if (!session?.user?.id)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Disable auto-apply via direct SQLite
+  // Disable auto-apply preference
   try {
-    const db = getDb();
-    db.prepare("UPDATE JobPreference SET autoApplyEnabled = 0 WHERE userId = ?").run(session.user.id);
-    db.close();
+    await prisma.jobPreference.updateMany({
+      where: { userId: session.user.id },
+      data: { autoApplyEnabled: false },
+    });
   } catch (e) {
     console.error("[AutoApply] Failed to disable preference:", e);
   }
