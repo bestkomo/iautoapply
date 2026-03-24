@@ -27,10 +27,8 @@ export async function POST(req: Request) {
   // Toggle save/unsave
   const existing = await prisma.savedJob.findFirst({
     where: {
-      userId_jobId: {
-        userId: session.user.id,
-        jobId,
-      },
+      userId: session.user.id,
+      jobId,
     },
   });
 

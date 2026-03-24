@@ -1,4 +1,4 @@
-import type { Job, JobPreference } from "@/generated/prisma/client";
+import type { Job, JobPreference } from "../../generated/prisma/client";
 import { fromJsonArray } from "@/lib/db/json-array";
 
 export interface MatchBreakdown {
