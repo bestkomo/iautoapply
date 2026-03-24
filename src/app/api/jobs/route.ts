@@ -1,10 +1,11 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
 import { fromJsonArray } from "@/lib/db/json-array";
 import { computeMatchScore } from "@/lib/matching/job-matcher";
-import type { Prisma } from "../../../generated/prisma/client";
+import type { Prisma } from "@/generated/prisma";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);

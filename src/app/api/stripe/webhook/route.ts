@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe/stripe";
 import { prisma } from "@/lib/db/prisma";
