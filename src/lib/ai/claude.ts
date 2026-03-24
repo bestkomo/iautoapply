@@ -1,13 +1,17 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AIProvider, AIOptions, AIResponse } from "./types";
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+let _client: Anthropic | null = null;
+function getClient() {
+  if (!_client) _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return _client;
+}
 
 export const claudeProvider: AIProvider = {
   name: "claude",
 
   async generateText(prompt: string, options: AIOptions = {}): Promise<AIResponse> {
-    const response = await client.messages.create({
+    const response = await getClient().messages.create({
       model: options.model || "claude-sonnet-4-20250514",
       max_tokens: options.maxTokens || 4096,
       temperature: options.temperature ?? 0.7,
@@ -32,7 +36,7 @@ export const claudeProvider: AIProvider = {
   },
 
   async *streamText(prompt: string, options: AIOptions = {}): AsyncIterable<string> {
-    const stream = client.messages.stream({
+    const stream = getClient().messages.stream({
       model: options.model || "claude-sonnet-4-20250514",
       max_tokens: options.maxTokens || 4096,
       temperature: options.temperature ?? 0.7,

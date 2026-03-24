@@ -1,13 +1,17 @@
 import OpenAI from "openai";
 import type { AIProvider, AIOptions, AIResponse } from "./types";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let _client: OpenAI | null = null;
+function getClient() {
+  if (!_client) _client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "dummy" });
+  return _client;
+}
 
 export const openaiProvider: AIProvider = {
   name: "openai",
 
   async generateText(prompt: string, options: AIOptions = {}): Promise<AIResponse> {
-    const response = await client.chat.completions.create({
+    const response = await getClient().chat.completions.create({
       model: options.model || "gpt-4o",
       max_tokens: options.maxTokens || 4096,
       temperature: options.temperature ?? 0.7,
@@ -29,7 +33,7 @@ export const openaiProvider: AIProvider = {
   },
 
   async *streamText(prompt: string, options: AIOptions = {}): AsyncIterable<string> {
-    const stream = await client.chat.completions.create({
+    const stream = await getClient().chat.completions.create({
       model: options.model || "gpt-4o",
       max_tokens: options.maxTokens || 4096,
       temperature: options.temperature ?? 0.7,
