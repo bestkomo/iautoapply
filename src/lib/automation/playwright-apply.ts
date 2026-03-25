@@ -1513,6 +1513,9 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(8000);
     await takeScreenshot(page, "workday-after-create-account");
+
+    // Check if Workday is asking for an email verification code
+    await handleWorkdayVerificationCode(page);
   }
 
   // If Create Account failed or wasn't found, try Sign In
@@ -1593,6 +1596,88 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
   }
 
   await takeScreenshot(page, "workday-account-complete");
+}
+
+/**
+ * Handle Workday's email verification code step.
+ * After creating an account, Workday sometimes sends a verification code email.
+ * This function detects the verification prompt and fetches the code from Gmail.
+ */
+async function handleWorkdayVerificationCode(page: Page) {
+  const pageText = await page.textContent("body").catch(() => "") || "";
+  const pageTextLower = pageText.toLowerCase();
+
+  // Check if the page is asking for a verification code
+  const isVerificationPage =
+    pageTextLower.includes("verification code") ||
+    pageTextLower.includes("verify your email") ||
+    pageTextLower.includes("enter the code") ||
+    pageTextLower.includes("we sent a code") ||
+    pageTextLower.includes("check your email") ||
+    pageTextLower.includes("enter code");
+
+  if (!isVerificationPage) {
+    console.log("[Playwright] Workday: No verification code step detected");
+    return;
+  }
+
+  console.log("[Playwright] Workday: VERIFICATION CODE step detected! Attempting to read from Gmail...");
+  await takeScreenshot(page, "workday-verification-code-prompt");
+
+  // Try to fetch the verification code from Gmail via our internal API
+  try {
+    const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3001";
+    const response = await fetch(`${baseUrl}/api/auth/gmail/verification-code?domain=workday.com&maxWait=60`, {
+      headers: { "Cookie": "" }, // This won't have a session — we need a different approach
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.found && data.code) {
+        console.log(`[Playwright] Workday: Got verification code: ${data.code}`);
+
+        // Find the verification code input field
+        const codeSelectors = [
+          'input[data-automation-id="verificationCode"]',
+          'input[data-automation-id="code"]',
+          'input[type="text"][maxlength="6"]',
+          'input[type="number"]',
+          'input[placeholder*="code"]',
+          'input[placeholder*="Code"]',
+          'input[aria-label*="code"]',
+          'input[aria-label*="Code"]',
+        ];
+
+        for (const sel of codeSelectors) {
+          try {
+            const input = page.locator(sel).first();
+            if (await input.isVisible({ timeout: 3000 }).catch(() => false)) {
+              await input.click();
+              await input.clear();
+              await input.pressSequentially(data.code, { delay: 100 });
+              console.log(`[Playwright] Workday: Entered verification code via: ${sel}`);
+
+              // Click Verify/Submit button
+              const verifyBtn = page.locator('button:has-text("Verify"), button:has-text("Submit"), button:has-text("Continue")').first();
+              if (await verifyBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+                await verifyBtn.click();
+                await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+                await stepDelay();
+                console.log("[Playwright] Workday: Verification code submitted");
+              }
+              break;
+            }
+          } catch { /* try next selector */ }
+        }
+      } else {
+        console.log("[Playwright] Workday: No verification code found in Gmail");
+      }
+    } else {
+      console.log("[Playwright] Workday: Gmail verification code API returned error");
+    }
+  } catch (err) {
+    console.log("[Playwright] Workday: Could not fetch verification code:", err instanceof Error ? err.message : String(err));
+  }
 }
 
 /**

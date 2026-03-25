@@ -17,7 +17,8 @@ export async function GET() {
     );
   }
 
-  const redirectUri = "http://localhost:3001/api/auth/gmail/callback";
+  const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3001";
+  const redirectUri = `${baseUrl}/api/auth/gmail/callback`;
   const scope = "https://www.googleapis.com/auth/gmail.readonly";
 
   const params = new URLSearchParams({

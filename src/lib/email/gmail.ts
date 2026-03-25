@@ -262,3 +262,104 @@ export function parseEmailContent(email: Record<string, unknown>): ParsedEmail {
     company,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/*  Verification Code Reader                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Search Gmail for a recent verification code email from an ATS platform.
+ * Waits up to `maxWaitMs` (polling every `pollIntervalMs`) for the email to arrive.
+ * Returns the extracted code or null if not found.
+ */
+export async function waitForVerificationCode(
+  accessToken: string,
+  options?: {
+    /** Max time to wait in ms (default: 60_000 = 60s) */
+    maxWaitMs?: number;
+    /** Poll interval in ms (default: 5_000 = 5s) */
+    pollIntervalMs?: number;
+    /** Only look at emails after this timestamp */
+    afterTimestamp?: Date;
+    /** Optional sender domain to filter (e.g. "workday.com") */
+    senderDomain?: string;
+  }
+): Promise<string | null> {
+  const maxWait = options?.maxWaitMs ?? 60_000;
+  const pollInterval = options?.pollIntervalMs ?? 5_000;
+  const afterTs = options?.afterTimestamp ?? new Date(Date.now() - 5 * 60_000); // last 5 min
+  const senderDomain = options?.senderDomain;
+
+  const client = getGmailClient(accessToken);
+  const afterEpoch = Math.floor(afterTs.getTime() / 1000);
+
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWait) {
+    try {
+      // Build Gmail search query for verification code emails
+      let query = `(subject:"verification code" OR subject:"verify your email" OR subject:"security code" OR subject:"confirm your" OR subject:"one-time" OR subject:"OTP" OR subject:"passcode") after:${afterEpoch} is:unread`;
+      if (senderDomain) {
+        query += ` from:${senderDomain}`;
+      }
+
+      const listResult = await client.listMessages(query, 5);
+      const messageIds: { id: string }[] = listResult.messages || [];
+
+      if (messageIds.length > 0) {
+        // Get the most recent matching email
+        const msg = await client.getMessage(messageIds[0].id);
+        const payload = msg.payload as Record<string, unknown>;
+        const body = extractBody(payload);
+        const headers = (payload?.headers || []) as Array<{ name: string; value: string }>;
+        const subject = getHeader(headers, "Subject");
+
+        // Try to extract the verification code
+        const code = extractVerificationCode(subject + " " + body);
+        if (code) {
+          console.log(`[Gmail] Found verification code: ${code}`);
+          return code;
+        }
+      }
+    } catch (err) {
+      console.error("[Gmail] Error polling for verification code:", err);
+    }
+
+    // Wait before next poll
+    await new Promise((r) => setTimeout(r, pollInterval));
+  }
+
+  console.log("[Gmail] Timed out waiting for verification code");
+  return null;
+}
+
+/**
+ * Extract a verification/OTP code from email text.
+ * Looks for common patterns: 4-8 digit codes, alphanumeric codes.
+ */
+function extractVerificationCode(text: string): string | null {
+  // Common patterns for verification codes:
+
+  // Pattern 1: "code is: 123456" or "code: 123456" or "code 123456"
+  const codeIsMatch = text.match(/(?:code|passcode|OTP|pin)[\s]*(?:is)?[\s:]*[\s](\d{4,8})/i);
+  if (codeIsMatch) return codeIsMatch[1];
+
+  // Pattern 2: "123456 is your verification code"
+  const codeBeforeMatch = text.match(/(\d{4,8})[\s]+(?:is your|is the)[\s]+(?:verification|security|one-time)/i);
+  if (codeBeforeMatch) return codeBeforeMatch[1];
+
+  // Pattern 3: Standalone 6-digit code on its own line or between spaces
+  // Look for a code that's visually prominent (surrounded by whitespace/newlines)
+  const standaloneMatch = text.match(/(?:^|\s)(\d{6})(?:\s|$|\.)/m);
+  if (standaloneMatch) return standaloneMatch[1];
+
+  // Pattern 4: Bold/emphasized code like **123456** or "123456"
+  const emphMatch = text.match(/[*"'](\d{4,8})[*"']/);
+  if (emphMatch) return emphMatch[1];
+
+  // Pattern 5: Alphanumeric code (e.g., "AB12CD")
+  const alphaMatch = text.match(/(?:code|passcode)[\s:]+([A-Z0-9]{4,8})/i);
+  if (alphaMatch) return alphaMatch[1];
+
+  return null;
+}

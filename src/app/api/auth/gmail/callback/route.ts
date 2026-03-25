@@ -2,6 +2,8 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 
+const BASE_URL = process.env.NEXTAUTH_URL || "http://localhost:3001";
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
@@ -9,24 +11,18 @@ export async function GET(req: Request) {
   const error = searchParams.get("error");
 
   if (error) {
-    return NextResponse.redirect(
-      new URL("/inbox?error=gmail_denied", "http://localhost:3001")
-    );
+    return NextResponse.redirect(new URL("/inbox?error=gmail_denied", BASE_URL));
   }
 
   if (!code || !userId) {
-    return NextResponse.redirect(
-      new URL("/inbox?error=gmail_invalid", "http://localhost:3001")
-    );
+    return NextResponse.redirect(new URL("/inbox?error=gmail_invalid", BASE_URL));
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    return NextResponse.redirect(
-      new URL("/inbox?error=gmail_config", "http://localhost:3001")
-    );
+    return NextResponse.redirect(new URL("/inbox?error=gmail_config", BASE_URL));
   }
 
   try {
@@ -38,7 +34,7 @@ export async function GET(req: Request) {
         code,
         client_id: clientId,
         client_secret: clientSecret,
-        redirect_uri: "http://localhost:3001/api/auth/gmail/callback",
+        redirect_uri: `${BASE_URL}/api/auth/gmail/callback`,
         grant_type: "authorization_code",
       }),
     });
@@ -46,9 +42,7 @@ export async function GET(req: Request) {
     if (!tokenRes.ok) {
       const errorText = await tokenRes.text();
       console.error("Token exchange failed:", errorText);
-      return NextResponse.redirect(
-        new URL("/inbox?error=gmail_token", "http://localhost:3001")
-      );
+      return NextResponse.redirect(new URL("/inbox?error=gmail_token", BASE_URL));
     }
 
     const tokens = await tokenRes.json();
@@ -65,13 +59,9 @@ export async function GET(req: Request) {
       },
     });
 
-    return NextResponse.redirect(
-      new URL("/inbox?gmail=connected", "http://localhost:3001")
-    );
+    return NextResponse.redirect(new URL("/inbox?gmail=connected", BASE_URL));
   } catch (err) {
     console.error("Gmail OAuth callback error:", err);
-    return NextResponse.redirect(
-      new URL("/inbox?error=gmail_error", "http://localhost:3001")
-    );
+    return NextResponse.redirect(new URL("/inbox?error=gmail_error", BASE_URL));
   }
 }
