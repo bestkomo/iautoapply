@@ -21,9 +21,9 @@ export const PLANS = {
   FREE: {
     name: "Free",
     price: 0,
-    applicationsPerDay: 5,
+    applicationsPerDay: 50,
     features: [
-      "5 auto-applies/day",
+      "50 auto-applies/day",
       "Job search",
       "Resume upload",
     ],
