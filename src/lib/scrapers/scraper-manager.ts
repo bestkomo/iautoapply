@@ -16,6 +16,7 @@ import { LeverScraper } from "./lever";
 import { JSearchScraper } from "./jsearch";
 import { ActiveJobsScraper } from "./activejobs";
 import { RemoteJobsAPIScraper } from "./remote-jobs-api";
+import { WorkdayScraper } from "./workday";
 
 const JOB_TYPE_MAP: Record<string, JobType> = {
   FULL_TIME: "FULL_TIME",
@@ -42,6 +43,7 @@ const SOURCE_MAP: Record<string, JobSource> = {
   JSEARCH: "JSEARCH",
   ACTIVEJOBS: "ACTIVEJOBS",
   REMOTEJOBS_API: "REMOTEJOBS_API",
+  WORKDAY: "WORKDAY",
   MANUAL: "MANUAL",
 };
 
@@ -58,17 +60,18 @@ export class ScraperManager {
 
   constructor() {
     this.scrapers = [
-      new JSearchScraper(), // JSearch first - aggregates Indeed, LinkedIn, Glassdoor, ZipRecruiter, Monster
+      new WorkdayScraper(), // Workday FIRST - direct healthcare company career sites
       new ActiveJobsScraper(), // Active Jobs DB - real ATS jobs from Workday, Greenhouse, Lever, Paylocity, SmartRecruiters
+      new JSearchScraper(), // JSearch - aggregates Indeed, LinkedIn, Glassdoor, ZipRecruiter, Monster
+      new RemoteJobsAPIScraper(), // Remote Jobs API - real ATS jobs with direct apply URLs
+      new GreenhouseScraper(),
+      new LeverScraper(),
       new RemoteOKScraper(),
       new ArbeitNowScraper(),
       new JobicyScraper(),
       new TheMuseScraper(),
       new RemotiveScraper(),
       new HimalayasScraper(),
-      new RemoteJobsAPIScraper(), // Remote Jobs API - real ATS jobs with direct apply URLs
-      new GreenhouseScraper(),
-      new LeverScraper(),
     ];
   }
 

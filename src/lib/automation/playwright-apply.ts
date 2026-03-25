@@ -1285,10 +1285,10 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
       }
     }
 
-    // If we got here, we went through steps but didn't find a submit
+    // If we got here, we went through steps but didn't find/click submit — NOT a success
     await takeScreenshot(page, "workday-final");
     return {
-      success: stepsCompleted > 0,
+      success: false,
       platform: "workday",
       message: stepsCompleted > 0
         ? `Workday: Completed ${stepsCompleted} form steps but could not find final Submit button`
