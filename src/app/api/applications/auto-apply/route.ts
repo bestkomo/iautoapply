@@ -193,8 +193,11 @@ export async function POST() {
   });
 
   console.log(`[AutoApply] Found ${directATSJobs.length} jobs with direct ATS URLs out of ${jobs.length} total`);
+  if (directATSJobs.length > 0) {
+    console.log("[AutoApply] Sample ATS URLs:", directATSJobs.slice(0, 3).map(j => `${j.title} -> ${j.applyUrl}`));
+  }
 
-  // Score and sort jobs
+  // Score and sort jobs — use low threshold (10%) to maximize matches
   const scoredJobs = directATSJobs
     .map((job) => {
       try {
@@ -205,7 +208,7 @@ export async function POST() {
         return { job, score: 0 };
       }
     })
-    .filter((item) => item.score >= 30)
+    .filter((item) => item.score >= 10)
     .sort((a, b) => b.score - a.score)
     .slice(0, remaining);
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
