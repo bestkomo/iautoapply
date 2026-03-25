@@ -240,7 +240,7 @@ export class ActiveJobsScraper extends BaseScraper {
 
     // Convert to annual if hourly/weekly/monthly
     let multiplier = 1;
-    if (unitText) {
+    if (unitText && typeof unitText === "string") {
       const unit = unitText.toUpperCase();
       if (unit === "HOUR") multiplier = 2080; // 40 hrs * 52 weeks
       if (unit === "WEEK") multiplier = 52;
@@ -253,8 +253,8 @@ export class ActiveJobsScraper extends BaseScraper {
     };
   }
 
-  private mapJobType(employmentType?: string | null): string {
-    if (!employmentType) return "FULL_TIME";
+  private mapJobType(employmentType?: unknown): string {
+    if (!employmentType || typeof employmentType !== "string") return "FULL_TIME";
 
     const normalized = employmentType.toUpperCase().replace(/[\s-]+/g, "_");
     const typeMap: Record<string, string> = {
