@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     try {
       const { extractText } = await import("unpdf");
       const result = await extractText(new Uint8Array(buffer));
-      text = result.text || "";
+      text = Array.isArray(result.text) ? result.text.join("\n") : (result.text || "");
       console.log("[Upload] PDF text extracted, length:", text.length, "preview:", text.substring(0, 200));
     } catch (pdfErr) {
       console.error("[Upload] PDF parse error:", pdfErr);
