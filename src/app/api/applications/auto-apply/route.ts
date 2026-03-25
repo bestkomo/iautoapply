@@ -238,7 +238,7 @@ export async function POST() {
     })
     .filter((item) => item.score >= 5)
     .sort((a, b) => b.score - a.score)
-    .slice(0, remaining);
+    .slice(0, Math.min(remaining, 2)); // Max 2 at a time to prevent OOM on 512MB Render
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
 
   // Fetch user profile for Playwright automation
@@ -268,9 +268,9 @@ export async function POST() {
     resumePath: resumePath || undefined,
   };
 
-  // Create Application records and trigger automation
+  // Create Application records and collect automation tasks (don't start yet)
   let applied = 0;
-  const automationPromises: Promise<void>[] = [];
+  const automationTasks: { applicationId: string; applyUrl: string; jobTitle: string; company: string }[] = [];
 
   for (const { job, score } of scoredJobs) {
     try {
@@ -296,16 +296,14 @@ export async function POST() {
 
       applied++;
 
-      // If the job has an apply URL, queue the Playwright automation
+      // Queue the automation task (don't start it yet)
       if (job.applyUrl) {
-        const automationTask = runAutomation(
-          application.id,
-          job.applyUrl,
-          applicantProfile,
-          job.title,
-          job.company
-        );
-        automationPromises.push(automationTask);
+        automationTasks.push({
+          applicationId: application.id,
+          applyUrl: job.applyUrl,
+          jobTitle: job.title,
+          company: job.company,
+        });
       } else {
         // No URL — just mark as applied (tracked only)
         await prisma.application.update({
@@ -321,9 +319,9 @@ export async function POST() {
     }
   }
 
-  // Run up to 3 Playwright automations in parallel (don't block the response)
-  if (automationPromises.length > 0) {
-    runBatchAutomation(automationPromises);
+  // Run Playwright automations SEQUENTIALLY in the background (1 at a time to prevent OOM)
+  if (automationTasks.length > 0) {
+    runSequentialAutomation(automationTasks, applicantProfile);
   }
 
   // Enable auto-apply preference
@@ -416,16 +414,33 @@ async function runAutomation(
 }
 
 /**
- * Run batches of 3 automations in parallel from the full list.
+ * Run Playwright automations ONE AT A TIME to prevent OOM on 512MB servers.
+ * Each browser is launched, used, and closed before the next one starts.
  * This runs in the background and does not block the API response.
  */
-async function runBatchAutomation(tasks: Promise<void>[]) {
-  const BATCH_SIZE = 1; // Run 1 at a time for easier debugging
+async function runSequentialAutomation(
+  tasks: { applicationId: string; applyUrl: string; jobTitle: string; company: string }[],
+  profile: ApplicantProfile
+) {
+  console.log(`[AutoApply] Starting sequential automation for ${tasks.length} jobs`);
 
-  for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
-    const batch = tasks.slice(i, i + BATCH_SIZE);
-    await Promise.allSettled(batch);
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    console.log(`[AutoApply] Running automation ${i + 1}/${tasks.length}: ${task.jobTitle}`);
+
+    await runAutomation(
+      task.applicationId,
+      task.applyUrl,
+      profile,
+      task.jobTitle,
+      task.company
+    );
+
+    // Small delay between automations to let memory free up
+    if (i < tasks.length - 1) {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
   }
 
-  console.log(`[AutoApply] All ${tasks.length} automation tasks completed`);
+  console.log(`[AutoApply] All ${tasks.length} sequential automation tasks completed`);
 }

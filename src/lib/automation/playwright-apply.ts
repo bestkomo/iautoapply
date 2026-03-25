@@ -242,12 +242,19 @@ export async function applyToJobReal(
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--single-process",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--disable-translate",
+        "--no-first-run",
+        "--js-flags=--max-old-space-size=128",
       ],
     });
 
     const context = await browser.newContext({
       userAgent: USER_AGENT,
-      viewport: { width: 1366, height: 768 },
+      viewport: { width: 1280, height: 720 },
       locale: "en-US",
     });
 
