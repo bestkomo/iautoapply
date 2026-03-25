@@ -15,6 +15,7 @@ import { GreenhouseScraper } from "./greenhouse";
 import { LeverScraper } from "./lever";
 import { JSearchScraper } from "./jsearch";
 import { ActiveJobsScraper } from "./activejobs";
+import { RemoteJobsAPIScraper } from "./remote-jobs-api";
 
 const JOB_TYPE_MAP: Record<string, JobType> = {
   FULL_TIME: "FULL_TIME",
@@ -40,6 +41,7 @@ const SOURCE_MAP: Record<string, JobSource> = {
   FINDWORK: "FINDWORK",
   JSEARCH: "JSEARCH",
   ACTIVEJOBS: "ACTIVEJOBS",
+  REMOTEJOBS_API: "REMOTEJOBS_API",
   MANUAL: "MANUAL",
 };
 
@@ -64,6 +66,7 @@ export class ScraperManager {
       new TheMuseScraper(),
       new RemotiveScraper(),
       new HimalayasScraper(),
+      new RemoteJobsAPIScraper(), // Remote Jobs API - real ATS jobs with direct apply URLs
       new GreenhouseScraper(),
       new LeverScraper(),
     ];
