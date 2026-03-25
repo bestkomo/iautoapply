@@ -23,20 +23,13 @@ export async function POST(req: Request) {
 
   if (file.name.endsWith(".pdf")) {
     try {
-      const { PDFParse } = await import("pdf-parse") as any;
-      const uint8 = new Uint8Array(buffer);
-      const parser = new PDFParse(uint8);
-      const result = await parser.getText();
-      // result is { pages: [{ text: "..." }, ...] }
-      if (result && result.pages) {
-        text = result.pages.map((p: { text: string }) => p.text).join("\n");
-      }
+      const { extractText } = await import("unpdf");
+      const result = await extractText(new Uint8Array(buffer));
+      text = result.text || "";
       console.log("[Upload] PDF text extracted, length:", text.length, "preview:", text.substring(0, 200));
     } catch (pdfErr) {
       console.error("[Upload] PDF parse error:", pdfErr);
-      // Fallback: convert buffer to string
-      text = buffer.toString("utf-8").replace(/[^\x20-\x7E\n]/g, " ");
-      console.log("[Upload] Fallback text length:", text.length);
+      text = "";
     }
   } else if (file.name.endsWith(".docx")) {
     try {

@@ -18,18 +18,12 @@ export async function POST(req: Request) {
 
   if (file.name.endsWith(".pdf")) {
     try {
-      const { PDFParse } = (await import("pdf-parse")) as any;
-      const uint8 = new Uint8Array(buffer);
-      const parser = new PDFParse(uint8);
-      const result = await parser.getText();
-      if (result && result.pages) {
-        text = result.pages
-          .map((p: { text: string }) => p.text)
-          .join("\n");
-      }
+      const { extractText } = await import("unpdf");
+      const result = await extractText(new Uint8Array(buffer));
+      text = result.text || "";
     } catch (pdfErr) {
       console.error("[Parse] PDF parse error:", pdfErr);
-      text = buffer.toString("utf-8").replace(/[^\x20-\x7E\n]/g, " ");
+      text = "";
     }
   } else if (file.name.endsWith(".docx")) {
     try {
