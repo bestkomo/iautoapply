@@ -443,12 +443,15 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
     await scrollToBottom(page);
     await stepDelay();
 
+    // --- Fill common required text fields Greenhouse often asks ---
+    console.log("[Playwright] Greenhouse: Filling common required text fields");
+    await fillGreenhouseCommonFields(page, profile);
+
     // Look for any additional required fields we may have missed
     // Check for required select dropdowns that are not filled
     await fillRequiredSelectsWithFirstOption(page);
 
-    // Handle Greenhouse-specific custom dropdowns (React Select with "Select..." text)
-    // These are used for EEO/Disability/Veteran questions
+    // Handle ALL dropdown types on Greenhouse forms
     try {
       // Fill ALL native select elements (not just required ones)
       const allSelects = page.locator('select');
@@ -471,6 +474,18 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
               break;
             }
           }
+          // Try "Yes" for work authorization type questions
+          if (!selectedDecline) {
+            for (let j = 0; j < optCount; j++) {
+              const text = await options.nth(j).textContent().catch(() => "");
+              if (text && text.trim().toLowerCase() === "yes") {
+                await sel.selectOption({ index: j });
+                selectedDecline = true;
+                console.log(`[Playwright] Greenhouse: Selected "Yes" for dropdown ${i}`);
+                break;
+              }
+            }
+          }
           if (!selectedDecline && optCount > 1) {
             // Select first non-empty option
             await sel.selectOption({ index: 1 });
@@ -480,29 +495,75 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
         }
       }
 
-      // Also handle React Select custom dropdowns (they show "Select..." as placeholder)
-      const reactSelects = page.locator('[class*="select__placeholder"]:has-text("Select"), [class*="Select__placeholder"]:has-text("Select")');
-      const reactSelectCount = await reactSelects.count();
-      if (reactSelectCount > 0) {
-        console.log(`[Playwright] Greenhouse: Found ${reactSelectCount} React Select dropdowns`);
-        for (let i = 0; i < reactSelectCount; i++) {
-          try {
-            await reactSelects.nth(i).click();
-            await page.waitForTimeout(500);
-            // Try clicking "I do not wish to answer" or first option
-            const declineOpt = page.locator('[class*="select__option"]:has-text("decline"), [class*="select__option"]:has-text("do not wish"), [class*="select__option"]:has-text("prefer not")').first();
-            if (await declineOpt.isVisible({ timeout: 1000 }).catch(() => false)) {
-              await declineOpt.click();
-            } else {
-              // Just pick the first option
-              const firstOpt = page.locator('[class*="select__option"]').first();
-              if (await firstOpt.isVisible({ timeout: 1000 }).catch(() => false)) {
-                await firstOpt.click();
+      // Handle React Select custom dropdowns - broader selectors
+      const reactSelectSelectors = [
+        '[class*="select__placeholder"]',
+        '[class*="Select__placeholder"]',
+        '[class*="css-"][class*="placeholder"]',
+        '.select__placeholder',
+      ];
+
+      for (const reactSel of reactSelectSelectors) {
+        const reactSelects = page.locator(reactSel);
+        const reactSelectCount = await reactSelects.count();
+        if (reactSelectCount > 0) {
+          console.log(`[Playwright] Greenhouse: Found ${reactSelectCount} React Select dropdowns via ${reactSel}`);
+          for (let i = 0; i < reactSelectCount; i++) {
+            try {
+              // Click the React Select container (parent of placeholder)
+              const placeholder = reactSelects.nth(i);
+              const container = placeholder.locator('..').first();
+              await container.click();
+              await page.waitForTimeout(800);
+
+              // Try clicking "Decline" / "I do not wish to answer" / "Prefer not" options
+              const declineSelectors = [
+                '[class*="select__option"]:has-text("Decline")',
+                '[class*="select__option"]:has-text("do not wish")',
+                '[class*="select__option"]:has-text("prefer not")',
+                '[class*="option"]:has-text("Decline")',
+                '[class*="option"]:has-text("do not wish")',
+                '[role="option"]:has-text("Decline")',
+                '[role="option"]:has-text("do not wish")',
+              ];
+              let clicked = false;
+              for (const dSel of declineSelectors) {
+                const opt = page.locator(dSel).first();
+                if (await opt.isVisible({ timeout: 500 }).catch(() => false)) {
+                  await opt.click();
+                  clicked = true;
+                  console.log(`[Playwright] Greenhouse: Clicked decline option for React Select ${i}`);
+                  break;
+                }
               }
-            }
-          } catch { /* skip */ }
+
+              // Try "Yes" for work authorization
+              if (!clicked) {
+                const yesOpt = page.locator('[class*="select__option"]:has-text("Yes"), [role="option"]:has-text("Yes")').first();
+                if (await yesOpt.isVisible({ timeout: 500 }).catch(() => false)) {
+                  await yesOpt.click();
+                  clicked = true;
+                  console.log(`[Playwright] Greenhouse: Clicked "Yes" for React Select ${i}`);
+                }
+              }
+
+              if (!clicked) {
+                // Just pick the first visible option
+                const firstOpt = page.locator('[class*="select__option"], [role="option"]').first();
+                if (await firstOpt.isVisible({ timeout: 500 }).catch(() => false)) {
+                  await firstOpt.click();
+                  console.log(`[Playwright] Greenhouse: Clicked first option for React Select ${i}`);
+                }
+              }
+              await page.waitForTimeout(300);
+            } catch { /* skip */ }
+          }
+          break; // Only use the first matching selector set
         }
       }
+
+      // Handle any unfilled required text inputs and textareas
+      await fillEmptyRequiredInputs(page);
     } catch (e) {
       console.log("[Playwright] Greenhouse: Error filling dropdowns:", e);
     }
@@ -655,6 +716,165 @@ async function selectGreenhouseCountry(page: Page, country: string): Promise<boo
 
   console.log("[Playwright] Could not find/select country dropdown");
   return false;
+}
+
+/**
+ * Fill common required text fields on Greenhouse forms.
+ * These include "How did you hear about us?", "Are you authorized to work?", etc.
+ */
+async function fillGreenhouseCommonFields(page: Page, profile: ApplicantProfile) {
+  try {
+    // Common question patterns and their answers
+    const commonAnswers: { patterns: string[]; answer: string }[] = [
+      {
+        patterns: ["how did you hear", "how did you find", "where did you hear", "referral source", "source of application"],
+        answer: "Online Job Board",
+      },
+      {
+        patterns: ["authorized to work", "legally authorized", "work authorization", "eligible to work", "right to work"],
+        answer: "Yes",
+      },
+      {
+        patterns: ["require sponsorship", "visa sponsorship", "immigration sponsorship", "need sponsorship"],
+        answer: "No",
+      },
+      {
+        patterns: ["salary expectation", "desired salary", "expected salary", "compensation expectation"],
+        answer: "Negotiable",
+      },
+      {
+        patterns: ["years of experience", "how many years"],
+        answer: "5",
+      },
+      {
+        patterns: ["start date", "available to start", "earliest start", "when can you start"],
+        answer: "Immediately",
+      },
+      {
+        patterns: ["cover letter", "why are you interested", "why do you want"],
+        answer: `I am very interested in this position and believe my healthcare experience and skills make me a strong candidate. I am excited about the opportunity to contribute to your team.`,
+      },
+    ];
+
+    // Find all visible labels and their associated inputs
+    const labels = page.locator('label');
+    const labelCount = await labels.count();
+
+    for (let i = 0; i < labelCount; i++) {
+      try {
+        const label = labels.nth(i);
+        const labelText = (await label.textContent().catch(() => "")) || "";
+        const labelLower = labelText.toLowerCase().trim();
+
+        if (!labelLower || labelLower.length < 3) continue;
+
+        for (const qa of commonAnswers) {
+          if (qa.patterns.some(p => labelLower.includes(p))) {
+            // Find the associated input
+            const forAttr = await label.getAttribute("for").catch(() => null);
+            let input;
+            if (forAttr) {
+              input = page.locator(`[id="${forAttr.replace(/"/g, '\\"')}"]`).first();
+            } else {
+              // Try sibling/child input
+              input = label.locator('~ input, ~ textarea, ~ div input, ~ div textarea, input, textarea').first();
+            }
+
+            if (input && await input.isVisible({ timeout: 500 }).catch(() => false)) {
+              const currentVal = await input.inputValue().catch(() => "");
+              if (!currentVal || currentVal.trim() === "") {
+                const tagName = await input.evaluate(el => el.tagName.toLowerCase()).catch(() => "input");
+                if (tagName === "textarea") {
+                  await input.fill(qa.answer);
+                } else {
+                  await input.fill(qa.answer);
+                }
+                console.log(`[Playwright] Greenhouse: Answered "${labelText.trim().substring(0, 50)}" with "${qa.answer.substring(0, 30)}"`);
+              }
+            }
+            break;
+          }
+        }
+      } catch { /* skip label */ }
+    }
+
+    // Also fill any empty required inputs with reasonable defaults
+    const requiredInputs = page.locator('input[required]:not([type="file"]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea[required]');
+    const reqCount = await requiredInputs.count();
+    for (let i = 0; i < reqCount; i++) {
+      try {
+        const inp = requiredInputs.nth(i);
+        const val = await inp.inputValue().catch(() => "");
+        if (!val || val.trim() === "") {
+          const name = (await inp.getAttribute("name").catch(() => "")) || "";
+          const placeholder = (await inp.getAttribute("placeholder").catch(() => "")) || "";
+          const type = (await inp.getAttribute("type").catch(() => "text")) || "text";
+          const hint = (name + " " + placeholder).toLowerCase();
+
+          if (hint.includes("linkedin") || hint.includes("url") || hint.includes("website")) {
+            await inp.fill(profile.linkedinUrl || "https://linkedin.com/in/applicant");
+          } else if (hint.includes("hear") || hint.includes("source") || hint.includes("referral")) {
+            await inp.fill("Online Job Board");
+          } else if (hint.includes("salary") || hint.includes("compensation")) {
+            await inp.fill("Negotiable");
+          } else if (type === "number" || hint.includes("year")) {
+            await inp.fill("5");
+          } else {
+            // Generic fill for unknown required fields
+            await inp.fill("N/A");
+          }
+          console.log(`[Playwright] Greenhouse: Filled required field "${name || placeholder}" with default`);
+        }
+      } catch { /* skip */ }
+    }
+  } catch (e) {
+    console.log("[Playwright] Greenhouse: Error in common fields:", e);
+  }
+}
+
+/**
+ * Fill any remaining empty required inputs and textareas.
+ */
+async function fillEmptyRequiredInputs(page: Page) {
+  try {
+    // Check for required checkboxes (like "I agree to terms")
+    const checkboxes = page.locator('input[type="checkbox"][required], input[type="checkbox"][aria-required="true"]');
+    const cbCount = await checkboxes.count();
+    for (let i = 0; i < cbCount; i++) {
+      try {
+        const cb = checkboxes.nth(i);
+        const checked = await cb.isChecked();
+        if (!checked) {
+          await cb.check();
+          console.log(`[Playwright] Checked required checkbox ${i}`);
+        }
+      } catch { /* skip */ }
+    }
+
+    // Check for required radio buttons — select the first one in each group
+    const radioGroups = await page.evaluate(() => {
+      const radios = document.querySelectorAll('input[type="radio"][required], input[type="radio"][aria-required="true"]');
+      const groups = new Set<string>();
+      radios.forEach(r => {
+        const name = r.getAttribute("name");
+        if (name) groups.add(name);
+      });
+      return Array.from(groups);
+    });
+
+    for (const groupName of radioGroups) {
+      try {
+        const firstRadio = page.locator(`input[type="radio"][name="${groupName}"]`).first();
+        const checked = await page.locator(`input[type="radio"][name="${groupName}"]:checked`).count();
+        if (checked === 0) {
+          await firstRadio.check();
+          console.log(`[Playwright] Selected first radio for group "${groupName}"`);
+        }
+      } catch { /* skip */ }
+    }
+  } catch (e) {
+    console.log("[Playwright] Error filling empty required inputs:", e);
+  }
 }
 
 /**

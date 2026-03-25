@@ -238,7 +238,7 @@ export async function POST() {
     })
     .filter((item) => item.score >= 5)
     .sort((a, b) => b.score - a.score)
-    .slice(0, Math.min(remaining, 2)); // Max 2 at a time to prevent OOM on 512MB Render
+    .slice(0, Math.min(remaining, 5)); // Max 5 at a time, run sequentially to prevent OOM
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
 
   // Fetch user profile for Playwright automation
@@ -281,7 +281,6 @@ export async function POST() {
           status: "PENDING",
           autoApplied: true,
           matchScore: score,
-          appliedAt: new Date(),
           notes: `Auto-apply queued with ${score}% match score`,
         },
       });
@@ -305,12 +304,12 @@ export async function POST() {
           company: job.company,
         });
       } else {
-        // No URL — just mark as applied (tracked only)
+        // No URL — mark as failed, not "applied"
         await prisma.application.update({
           where: { id: application.id },
           data: {
-            status: "APPLIED",
-            notes: `Auto-applied with ${score}% match score (no apply URL - tracked only)`,
+            status: "PENDING",
+            notes: `No apply URL available - cannot auto-apply`,
           },
         });
       }
@@ -387,7 +386,8 @@ async function runAutomation(
     await prisma.application.update({
       where: { id: applicationId },
       data: {
-        status: result.success ? "APPLIED" : "PENDING",
+        status: result.success ? "APPLIED" : "REJECTED",
+        appliedAt: result.success ? new Date() : undefined,
         notes: `${result.platform}: ${result.message}`,
       },
     });
@@ -397,7 +397,7 @@ async function runAutomation(
         applicationId,
         type: result.success ? "AUTO_APPLIED" : "AUTO_APPLY_FAILED",
         description: result.success
-          ? `Applied to ${jobTitle} at ${company} via ${result.platform}`
+          ? `Successfully applied to ${jobTitle} at ${company} via ${result.platform}`
           : `Auto-apply failed for ${jobTitle} at ${company}: ${result.message}`,
       },
     });
@@ -406,7 +406,7 @@ async function runAutomation(
     await prisma.application.update({
       where: { id: applicationId },
       data: {
-        status: "PENDING",
+        status: "REJECTED",
         notes: `Automation error: ${error instanceof Error ? error.message : "Unknown"}`,
       },
     }).catch(() => {});
