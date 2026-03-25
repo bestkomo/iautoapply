@@ -4,7 +4,9 @@ const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefi
 
 function getPrisma(): PrismaClient {
   if (!globalForPrisma.prisma) {
-    globalForPrisma.prisma = new PrismaClient();
+    globalForPrisma.prisma = new PrismaClient({
+      datasourceUrl: process.env.DATABASE_URL,
+    });
   }
   return globalForPrisma.prisma;
 }
