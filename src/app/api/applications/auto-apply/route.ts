@@ -8,6 +8,7 @@ import { computeMatchScore } from "@/lib/matching/job-matcher";
 import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { getResumeFilePath } from "@/lib/automation/resume-file";
 import { canAutoApply } from "@/lib/stripe/check-subscription";
+import { getScraperManager } from "@/lib/scrapers/scraper-manager";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -154,7 +155,25 @@ export async function POST() {
     );
   }
 
-  // Find matching jobs that haven't been applied to
+  // Step 1: Scrape fresh jobs matching user's desired titles
+  const desiredTitles = fromJsonArray(preferences.desiredTitles as string);
+  const desiredLocations = fromJsonArray(preferences.desiredLocations as string);
+  const scrapeQueries = desiredTitles.length > 0 ? desiredTitles.slice(0, 3) : ["healthcare"];
+  const scrapeLocation = desiredLocations.length > 0 ? desiredLocations[0] : undefined;
+
+  console.log(`[AutoApply] Scraping fresh jobs for queries: ${scrapeQueries.join(", ")}`);
+  try {
+    const manager = getScraperManager();
+    // Scrape for each desired title in parallel
+    await Promise.allSettled(
+      scrapeQueries.map((q) => manager.scrapeAll(q, scrapeLocation))
+    );
+    console.log("[AutoApply] Fresh scrape completed");
+  } catch (scrapeErr) {
+    console.error("[AutoApply] Scrape error (continuing with existing jobs):", scrapeErr);
+  }
+
+  // Step 2: Find matching jobs that haven't been applied to
   const existingApplicationJobIds = (
     await prisma.application.findMany({
       where: { userId: session.user.id },
@@ -177,7 +196,7 @@ export async function POST() {
     take: 200,
   });
 
-  // Only keep jobs with DIRECT ATS apply URLs (not aggregator redirects)
+  // Accept jobs with DIRECT ATS apply URLs OR any valid apply URL (company careers pages, etc.)
   const ATS_DOMAINS = [
     "greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.com",
     "smartrecruiters.com", "icims.com", "paylocity.com", "jobvite.com",
@@ -186,19 +205,28 @@ export async function POST() {
     "apply.workable.com", "jobs.lever.co", "boards.greenhouse.io",
   ];
 
-  const directATSJobs = jobs.filter((job) => {
+  // Blocked aggregator domains — these redirect and can't be auto-applied to
+  const BLOCKED_DOMAINS = [
+    "indeed.com", "linkedin.com", "glassdoor.com", "ziprecruiter.com",
+    "monster.com", "careerbuilder.com",
+  ];
+
+  const applyableJobs = jobs.filter((job) => {
     if (!job.applyUrl) return false;
     const url = job.applyUrl.toLowerCase();
-    return ATS_DOMAINS.some((domain) => url.includes(domain));
+    // Block aggregator redirects
+    if (BLOCKED_DOMAINS.some((d) => url.includes(d))) return false;
+    // Accept everything else (ATS, company career pages, direct apply URLs)
+    return true;
   });
 
-  console.log(`[AutoApply] Found ${directATSJobs.length} jobs with direct ATS URLs out of ${jobs.length} total`);
-  if (directATSJobs.length > 0) {
-    console.log("[AutoApply] Sample ATS URLs:", directATSJobs.slice(0, 3).map(j => `${j.title} -> ${j.applyUrl}`));
+  console.log(`[AutoApply] Found ${applyableJobs.length} applyable jobs out of ${jobs.length} total`);
+  if (applyableJobs.length > 0) {
+    console.log("[AutoApply] Sample URLs:", applyableJobs.slice(0, 5).map(j => `${j.title} -> ${j.applyUrl}`));
   }
 
-  // Score and sort jobs — use low threshold (10%) to maximize matches
-  const scoredJobs = directATSJobs
+  // Score and sort jobs — use low threshold (5%) to maximize matches
+  const scoredJobs = applyableJobs
     .map((job) => {
       try {
         const result = computeMatchScore(job, preferences);
@@ -208,7 +236,7 @@ export async function POST() {
         return { job, score: 0 };
       }
     })
-    .filter((item) => item.score >= 10)
+    .filter((item) => item.score >= 5)
     .sort((a, b) => b.score - a.score)
     .slice(0, remaining);
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));

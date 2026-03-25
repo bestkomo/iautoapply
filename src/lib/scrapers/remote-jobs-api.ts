@@ -37,7 +37,7 @@ export class RemoteJobsAPIScraper extends BaseScraper {
       const params = new URLSearchParams({
         country: "us",
         limit: MAX_RESULTS.toString(),
-        include_company: "false",
+        include_company: "true",
         include_total_count: "false",
       });
 
