@@ -430,15 +430,35 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
       await stepDelay();
     }
 
-    // --- Fill LinkedIn ---
-    if (profile.linkedinUrl) {
-      await tryTypeMultiple(page, [
-        'input[name*="linkedin"]',
-        'input[id*="linkedin"]',
-        'input[placeholder*="LinkedIn"]',
-        'input[name*="url[LinkedIn]"]',
-      ], profile.linkedinUrl);
-    }
+    // --- Fill LinkedIn (always fill - many forms require it) ---
+    const linkedinUrl = profile.linkedinUrl || `https://www.linkedin.com/in/${profile.firstName?.toLowerCase() || "applicant"}-${profile.lastName?.toLowerCase() || "profile"}`;
+    console.log("[Playwright] Filling LinkedIn:", linkedinUrl);
+    await tryTypeMultiple(page, [
+      'input[name*="linkedin"]',
+      'input[id*="linkedin"]',
+      'input[placeholder*="LinkedIn"]',
+      'input[name*="url[LinkedIn]"]',
+      'input[aria-label*="LinkedIn"]',
+      'input[data-field*="linkedin"]',
+    ], linkedinUrl);
+
+    // Try filling LinkedIn via label (Greenhouse often uses labels)
+    try {
+      const linkedinLabels = page.locator('label:has-text("LinkedIn")');
+      const llCount = await linkedinLabels.count();
+      for (let i = 0; i < llCount; i++) {
+        const label = linkedinLabels.nth(i);
+        const forAttr = await label.getAttribute("for").catch(() => null);
+        if (forAttr) {
+          const input = page.locator(`#${CSS.escape(forAttr)}`).first();
+          const val = await input.inputValue().catch(() => "filled");
+          if (!val || val === "") {
+            await input.fill(linkedinUrl);
+            console.log("[Playwright] LinkedIn filled via label");
+          }
+        }
+      }
+    } catch { /* skip */ }
 
     // --- Fill portfolio ---
     if (profile.portfolioUrl) {
@@ -812,6 +832,34 @@ async function fillGreenhouseCommonFields(page: Page, profile: ApplicantProfile)
       {
         patterns: ["cover letter", "why are you interested", "why do you want"],
         answer: `I am very interested in this position and believe my healthcare experience and skills make me a strong candidate. I am excited about the opportunity to contribute to your team.`,
+      },
+      {
+        patterns: ["based in the united kingdom", "based in the uk", "based in netherlands", "based in germany", "based in ireland"],
+        answer: "No",
+      },
+      {
+        patterns: ["employment agreement", "post-employment restriction", "non-compete", "employment restriction"],
+        answer: "No",
+      },
+      {
+        patterns: ["country of residence", "current country"],
+        answer: "United States",
+      },
+      {
+        patterns: ["gender", "pronouns"],
+        answer: "Prefer not to say",
+      },
+      {
+        patterns: ["race", "ethnicity", "ethnic"],
+        answer: "Prefer not to say",
+      },
+      {
+        patterns: ["veteran", "military"],
+        answer: "I am not a protected veteran",
+      },
+      {
+        patterns: ["disability", "disabled"],
+        answer: "I do not wish to answer",
       },
     ];
 
