@@ -27,6 +27,18 @@ export async function GET() {
     });
   }
 
+  // Clean up stuck PENDING applications older than 30 minutes
+  const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+  await prisma.application.updateMany({
+    where: {
+      userId: session.user.id,
+      autoApplied: true,
+      status: "PENDING",
+      appliedAt: { lt: thirtyMinAgo },
+    },
+    data: { status: "REJECTED" },
+  });
+
   // Count today's auto-applied applications
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -134,6 +146,18 @@ export async function POST() {
       { status: 400 }
     );
   }
+
+  // Clean up stuck PENDING applications older than 30 minutes — mark as REJECTED
+  const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000);
+  await prisma.application.updateMany({
+    where: {
+      userId: session.user.id,
+      autoApplied: true,
+      status: "PENDING",
+      appliedAt: { lt: thirtyMinAgo },
+    },
+    data: { status: "REJECTED" },
+  });
 
   // Use the lower of subscription limit remaining and preference limit
   const todayStart = new Date();

@@ -581,6 +581,16 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
 
       // Handle any unfilled required text inputs and textareas
       await fillEmptyRequiredInputs(page);
+
+      // Check all required checkboxes (agreement, consent, etc.)
+      const checkboxes = page.locator('input[type="checkbox"]:not(:checked)');
+      const cbCount = await checkboxes.count();
+      for (let i = 0; i < cbCount; i++) {
+        try {
+          await checkboxes.nth(i).check({ force: true });
+          console.log(`[Playwright] Checked required checkbox ${i + 1}`);
+        } catch { /* skip */ }
+      }
     } catch (e) {
       console.log("[Playwright] Greenhouse: Error filling dropdowns:", e);
     }
@@ -645,11 +655,15 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
         };
       }
 
-      // If no confirmation text but also no errors, assume it went through
+      // No confirmation and no errors - check if URL changed (redirect to thank you page)
+      const currentUrl = page.url();
+      const urlChanged = currentUrl.includes("thank") || currentUrl.includes("confirm") || currentUrl.includes("success");
       return {
-        success: true,
+        success: urlChanged,
         platform: "greenhouse",
-        message: "Application submitted via Greenhouse (no explicit confirmation detected)",
+        message: urlChanged
+          ? "Application submitted via Greenhouse (URL redirect detected)"
+          : "Form submitted but no confirmation detected - application may not have completed",
       };
     }
 
@@ -3084,12 +3098,26 @@ async function applyGeneric(page: Page, profile: ApplicantProfile): Promise<Appl
       await takeScreenshot(page, "generic-post-submit");
 
       const confirmed = await checkForConfirmation(page);
+
+      // Check for validation errors after submit
+      const pageText = await page.textContent("body").catch(() => "") || "";
+      const hasErrors = /required|error|invalid|please fill|missing|incomplete/i.test(pageText) &&
+        !confirmed;
+
+      if (hasErrors && !confirmed) {
+        return {
+          success: false,
+          platform: "generic",
+          message: "Form submitted but validation errors detected - application likely not completed",
+        };
+      }
+
       return {
-        success: confirmed || submitted,
+        success: confirmed,
         platform: "generic",
         message: confirmed
           ? "Application submitted and confirmed (generic form)"
-          : "Application submitted (generic form)",
+          : "Form submitted but no confirmation detected - application may not have been completed",
       };
     }
 
