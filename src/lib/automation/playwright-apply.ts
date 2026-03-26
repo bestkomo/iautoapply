@@ -248,7 +248,12 @@ export async function applyToJobReal(
         "--disable-sync",
         "--disable-translate",
         "--no-first-run",
-        "--js-flags=--max-old-space-size=128",
+        "--disable-features=TranslateUI",
+        "--disable-ipc-flooding-protection",
+        "--disable-renderer-backgrounding",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-component-update",
+        "--js-flags=--max-old-space-size=96",
       ],
     });
 
@@ -256,6 +261,18 @@ export async function applyToJobReal(
       userAgent: USER_AGENT,
       viewport: { width: 1280, height: 720 },
       locale: "en-US",
+      // Block images and fonts to save memory
+      bypassCSP: true,
+    });
+
+    // Block images, fonts, and media to reduce memory
+    await context.route('**/*.{png,jpg,jpeg,gif,svg,webp,ico,woff,woff2,ttf,eot}', (route) => route.abort());
+    await context.route('**/*', (route) => {
+      const resourceType = route.request().resourceType();
+      if (['image', 'media', 'font'].includes(resourceType)) {
+        return route.abort();
+      }
+      return route.continue();
     });
 
     // Set a global timeout for the entire operation

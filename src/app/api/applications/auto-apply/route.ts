@@ -158,16 +158,14 @@ export async function POST() {
   // Step 1: Scrape fresh jobs matching user's desired titles
   const desiredTitles = fromJsonArray(preferences.desiredTitles as string);
   const desiredLocations = fromJsonArray(preferences.desiredLocations as string);
-  const scrapeQueries = desiredTitles.length > 0 ? desiredTitles.slice(0, 3) : ["healthcare"];
+  // Only scrape 1 query to save memory on 512MB servers
+  const scrapeQuery = desiredTitles.length > 0 ? desiredTitles[0] : "healthcare";
   const scrapeLocation = desiredLocations.length > 0 ? desiredLocations[0] : undefined;
 
-  console.log(`[AutoApply] Scraping fresh jobs for queries: ${scrapeQueries.join(", ")}`);
+  console.log(`[AutoApply] Scraping fresh jobs for query: "${scrapeQuery}"`);
   try {
     const manager = getScraperManager();
-    // Scrape for each desired title in parallel
-    await Promise.allSettled(
-      scrapeQueries.map((q) => manager.scrapeAll(q, scrapeLocation))
-    );
+    await manager.scrapeAll(scrapeQuery, scrapeLocation);
     console.log("[AutoApply] Fresh scrape completed");
   } catch (scrapeErr) {
     console.error("[AutoApply] Scrape error (continuing with existing jobs):", scrapeErr);
@@ -261,7 +259,7 @@ export async function POST() {
     })
     .filter((item) => item.score >= 5)
     .sort((a, b) => b.score - a.score)
-    .slice(0, Math.min(remaining, 5)); // Max 5 at a time, run sequentially to prevent OOM
+    .slice(0, Math.min(remaining, 3)); // Max 3 at a time, run sequentially to prevent OOM on 512MB
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
 
   // Fetch user profile for Playwright automation
@@ -459,9 +457,10 @@ async function runSequentialAutomation(
       task.company
     );
 
-    // Small delay between automations to let memory free up
+    // Delay between automations to let memory free up + force GC
     if (i < tasks.length - 1) {
-      await new Promise((r) => setTimeout(r, 2000));
+      try { if (global.gc) global.gc(); } catch { /* GC not exposed */ }
+      await new Promise((r) => setTimeout(r, 3000));
     }
   }
 
