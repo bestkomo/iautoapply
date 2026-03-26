@@ -44,6 +44,8 @@ export const preferencesSchema = z.object({
   desiredLocations: z.array(z.string()).default([]),
   remoteOnly: z.boolean().default(false),
   salaryMin: z.number().optional(),
+  maxAutoApplyDay: z.number().min(1).max(100).default(10),
+  minMatchScore: z.number().min(0).max(100).optional(),
   jobTypes: z
     .array(
       z.enum([
