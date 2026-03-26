@@ -647,6 +647,34 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
       const hasErrors = await page.locator('.field-error, .error-message, [class*="error"], .invalid-feedback').first()
         .isVisible({ timeout: 2000 }).catch(() => false);
       if (hasErrors) {
+        // Log which fields have errors
+        try {
+          const errorElements = page.locator('.field-error, .error-message, [class*="error"]:not(body):not(html), .invalid-feedback');
+          const errorCount = await errorElements.count();
+          const errorTexts: string[] = [];
+          for (let i = 0; i < Math.min(errorCount, 10); i++) {
+            const text = await errorElements.nth(i).textContent().catch(() => "");
+            if (text && text.trim().length > 0 && text.trim().length < 200) {
+              errorTexts.push(text.trim());
+            }
+          }
+          // Also find required fields that are empty
+          const emptyRequired = page.locator('input[required]:not([type="hidden"]), select[required], textarea[required]');
+          const emptyCount = await emptyRequired.count();
+          const emptyFields: string[] = [];
+          for (let i = 0; i < Math.min(emptyCount, 10); i++) {
+            const val = await emptyRequired.nth(i).inputValue().catch(() => "filled");
+            if (!val || val === "") {
+              const name = await emptyRequired.nth(i).getAttribute("name").catch(() => "");
+              const placeholder = await emptyRequired.nth(i).getAttribute("placeholder").catch(() => "");
+              const ariaLabel = await emptyRequired.nth(i).getAttribute("aria-label").catch(() => "");
+              emptyFields.push(name || placeholder || ariaLabel || "unknown");
+            }
+          }
+          console.log(`[Playwright] Greenhouse: ${errorTexts.length} error messages:`, errorTexts.join(" | "));
+          console.log(`[Playwright] Greenhouse: ${emptyFields.length} empty required fields:`, emptyFields.join(", "));
+        } catch { /* ignore logging errors */ }
+
         console.log("[Playwright] Greenhouse: Form validation errors detected after submit");
         return {
           success: false,
