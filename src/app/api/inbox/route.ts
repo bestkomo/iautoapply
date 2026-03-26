@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
 import {
   fetchApplicationEmails,
+  getValidGmailToken,
   type ParsedEmail,
   type EmailStatus,
 } from "@/lib/email/gmail";
@@ -60,15 +61,11 @@ export async function GET() {
   const userId = session.user.id;
   const items: InboxItem[] = [];
 
-  // Get user's Gmail token from database
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { gmailAccessToken: true, gmailRefreshToken: true },
-  });
-
+  // Get a valid Gmail token (auto-refreshes if expired)
   let gmailConnected = false;
+  const validToken = await getValidGmailToken(userId);
 
-  if (user?.gmailAccessToken) {
+  if (validToken) {
     gmailConnected = true;
     try {
       // Fetch emails from the last 30 days
@@ -76,7 +73,7 @@ export async function GET() {
       since.setDate(since.getDate() - 30);
 
       const emails: ParsedEmail[] = await fetchApplicationEmails(
-        user.gmailAccessToken,
+        validToken,
         since
       );
 
@@ -94,8 +91,6 @@ export async function GET() {
       }
     } catch (err) {
       console.error("Failed to fetch Gmail emails:", err);
-      // If token expired, we might need to refresh
-      // For now, continue with application data
     }
   }
 

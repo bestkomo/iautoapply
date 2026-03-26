@@ -196,28 +196,51 @@ export async function POST() {
     take: 200,
   });
 
-  // Accept jobs with DIRECT ATS apply URLs OR any valid apply URL (company careers pages, etc.)
+  // Known ATS domains where Playwright can actually fill out application forms
   const ATS_DOMAINS = [
-    "greenhouse.io", "lever.co", "myworkdayjobs.com", "workday.com",
-    "smartrecruiters.com", "icims.com", "paylocity.com", "jobvite.com",
-    "ultipro.com", "successfactors.com", "taleo.net", "breezy.hr",
+    "greenhouse.io", "boards.greenhouse.io", "job-boards.greenhouse.io",
+    "lever.co", "jobs.lever.co",
+    "myworkdayjobs.com", "workday.com", ".wd1.", ".wd3.", ".wd5.",
+    "smartrecruiters.com", "jobs.smartrecruiters.com",
+    "icims.com",
+    "paylocity.com", "jobvite.com", "ultipro.com",
+    "successfactors.com", "taleo.net", "breezy.hr",
     "ashbyhq.com", "bamboohr.com", "jazz.co", "recruiterbox.com",
-    "apply.workable.com", "jobs.lever.co", "boards.greenhouse.io",
+    "apply.workable.com",
   ];
 
-  // Blocked aggregator domains — these redirect and can't be auto-applied to
+  // Blocked aggregator domains — these redirect/preview and can't be auto-applied to
   const BLOCKED_DOMAINS = [
     "indeed.com", "linkedin.com", "glassdoor.com", "ziprecruiter.com",
     "monster.com", "careerbuilder.com",
+    // Job preview/aggregator sites that don't have application forms
+    "tealhq.com", "jobrapido.com", "jobleads.com", "learn4good.com",
+    "jooble.org", "talent.com", "adzuna.com", "simplyhired.com",
+    "snagajob.com", "lensa.com", "jobgether.com", "wellfound.com",
+    "dice.com", "flexjobs.com", "remote.co", "weworkremotely.com",
+    "himalayas.app", "remotive.com", "remoteok.com", "arbeitnow.com",
+    "jobicy.com", "getwork.com", "ladders.com", "salary.com",
+    "neuvoo.com", "careerjet.com", "jobserve.com", "reed.co.uk",
+    "totaljobs.com", "cv-library.co.uk", "hubstaff.com",
   ];
 
   const applyableJobs = jobs.filter((job) => {
     if (!job.applyUrl) return false;
     const url = job.applyUrl.toLowerCase();
-    // Block aggregator redirects
+    // Block known aggregator/redirect sites
     if (BLOCKED_DOMAINS.some((d) => url.includes(d))) return false;
-    // Accept everything else (ATS, company career pages, direct apply URLs)
+    // PREFER jobs with known ATS URLs (these are most likely to work)
+    // But also accept company career pages (they might have forms)
     return true;
+  });
+
+  // Sort: ATS domain jobs first, then others
+  applyableJobs.sort((a, b) => {
+    const aIsATS = ATS_DOMAINS.some((d) => a.applyUrl!.toLowerCase().includes(d));
+    const bIsATS = ATS_DOMAINS.some((d) => b.applyUrl!.toLowerCase().includes(d));
+    if (aIsATS && !bIsATS) return -1;
+    if (!aIsATS && bIsATS) return 1;
+    return 0;
   });
 
   console.log(`[AutoApply] Found ${applyableJobs.length} applyable jobs out of ${jobs.length} total`);

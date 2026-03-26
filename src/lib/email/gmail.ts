@@ -1,6 +1,83 @@
 // Gmail API client using REST endpoints (no googleapis SDK)
 
+import { prisma } from "@/lib/db/prisma";
+
 const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+/**
+ * Refresh a Gmail access token using the refresh token.
+ * Updates the database with the new access token and returns it.
+ */
+export async function refreshGmailToken(userId: string, refreshToken: string): Promise<string | null> {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    console.error("[Gmail] Cannot refresh token: missing client credentials or refresh token");
+    return null;
+  }
+
+  try {
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error("[Gmail] Token refresh failed:", errorText);
+      return null;
+    }
+
+    const data = await res.json();
+    const newAccessToken = data.access_token as string;
+
+    // Save the new access token to the database
+    await prisma.user.update({
+      where: { id: userId },
+      data: { gmailAccessToken: newAccessToken },
+    });
+
+    console.log("[Gmail] Access token refreshed successfully");
+    return newAccessToken;
+  } catch (err) {
+    console.error("[Gmail] Error refreshing token:", err);
+    return null;
+  }
+}
+
+/**
+ * Get a valid Gmail access token for a user, refreshing if needed.
+ */
+export async function getValidGmailToken(userId: string): Promise<string | null> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { gmailAccessToken: true, gmailRefreshToken: true },
+  });
+
+  if (!user?.gmailAccessToken) return null;
+
+  // Try the current token first
+  try {
+    const testRes = await fetch(`${GMAIL_API_BASE}/profile`, {
+      headers: { Authorization: `Bearer ${user.gmailAccessToken}` },
+    });
+    if (testRes.ok) return user.gmailAccessToken;
+  } catch { /* token might be expired */ }
+
+  // Token expired — try to refresh
+  if (user.gmailRefreshToken) {
+    return refreshGmailToken(userId, user.gmailRefreshToken);
+  }
+
+  return null;
+}
 
 export function getGmailClient(accessToken: string) {
   async function request(path: string, params?: Record<string, string>) {
