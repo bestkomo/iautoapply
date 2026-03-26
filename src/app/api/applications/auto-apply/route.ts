@@ -38,6 +38,7 @@ export async function GET() {
           userId: session.user.id,
           autoApplied: true,
           appliedAt: { gte: todayStart },
+          status: { in: ["APPLIED", "PENDING"] },
         },
       }),
       prisma.application.count({
@@ -143,6 +144,7 @@ export async function POST() {
       userId: session.user.id,
       autoApplied: true,
       appliedAt: { gte: todayStart },
+      status: { in: ["APPLIED", "PENDING"] }, // Only count successful + in-progress, not REJECTED
     },
   });
 
