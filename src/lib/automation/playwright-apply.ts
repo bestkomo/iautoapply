@@ -38,16 +38,35 @@ const USER_AGENT =
 
 /** Confirmation keywords that indicate a successful submission */
 const CONFIRMATION_KEYWORDS = [
-  "thank you",
+  "thank you for applying",
   "thanks for applying",
   "application submitted",
   "application received",
   "successfully submitted",
-  "we have received",
-  "your application has been",
+  "we have received your application",
+  "your application has been submitted",
+  "your application has been received",
   "application complete",
+  "you have successfully applied",
   "you have applied",
-  "confirmation",
+  "application confirmation",
+  "we'll review your application",
+  "we will review your application",
+];
+
+/** Error keywords that indicate the submission failed */
+const ERROR_KEYWORDS = [
+  "required field",
+  "please fill",
+  "is required",
+  "please complete",
+  "missing required",
+  "please enter",
+  "invalid format",
+  "must be completed",
+  "error submitting",
+  "submission failed",
+  "could not submit",
 ];
 
 /* ------------------------------------------------------------------ */
@@ -198,13 +217,16 @@ async function takeScreenshot(page: Page, label: string): Promise<string> {
 
 /**
  * Check if the page shows a confirmation message indicating successful submission.
- * Returns true if confirmation text is found.
+ * Returns true only if confirmation text is found AND no error text is present.
  */
 async function checkForConfirmation(page: Page): Promise<boolean> {
   try {
     const bodyText = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "");
     const lower = bodyText.toLowerCase();
-    return CONFIRMATION_KEYWORDS.some((kw) => lower.includes(kw));
+    const hasConfirmation = CONFIRMATION_KEYWORDS.some((kw) => lower.includes(kw));
+    const hasErrors = ERROR_KEYWORDS.some((kw) => lower.includes(kw));
+    // Only confirm if we see confirmation text and NO error text
+    return hasConfirmation && !hasErrors;
   } catch {
     return false;
   }
@@ -1185,18 +1207,19 @@ async function applyLever(page: Page, profile: ApplicantProfile): Promise<ApplyR
       await takeScreenshot(page, "lever-post-submit");
 
       const confirmed = await checkForConfirmation(page);
-      if (confirmed) {
-        return {
-          success: true,
-          platform: "lever",
-          message: "Application submitted and confirmed via Lever",
-        };
-      }
+      // Also check URL for confirmation patterns
+      const currentUrl = page.url().toLowerCase();
+      const urlConfirmed = currentUrl.includes("thank") || currentUrl.includes("confirm") || currentUrl.includes("success") || currentUrl.includes("applied");
+      // Check for validation errors that indicate form wasn't accepted
+      const hasErrors = await page.locator('[class*="error"], [class*="invalid"], .field-error, .form-error, [role="alert"]').count().catch(() => 0);
 
+      const isSuccess = (confirmed || urlConfirmed) && hasErrors === 0;
       return {
-        success: true,
+        success: isSuccess,
         platform: "lever",
-        message: "Application submitted via Lever (no explicit confirmation detected)",
+        message: isSuccess
+          ? "Application submitted and confirmed via Lever"
+          : `Lever form submitted but not confirmed (errors: ${hasErrors}, confirmation: ${confirmed}, urlConfirmed: ${urlConfirmed})`,
       };
     }
 
@@ -2817,12 +2840,16 @@ async function applySmartRecruiters(page: Page, profile: ApplicantProfile): Prom
       await takeScreenshot(page, "smartrecruiters-post-submit");
 
       const confirmed = await checkForConfirmation(page);
+      const currentUrl = page.url().toLowerCase();
+      const urlConfirmed = currentUrl.includes("thank") || currentUrl.includes("confirm") || currentUrl.includes("success");
+      const hasErrors = await page.locator('[class*="error"], [class*="invalid"], .field-error, .form-error, [role="alert"]').count().catch(() => 0);
+      const isSuccess = (confirmed || urlConfirmed) && hasErrors === 0;
       return {
-        success: confirmed || submitted,
+        success: isSuccess,
         platform: "smartrecruiters",
-        message: confirmed
+        message: isSuccess
           ? "Application submitted and confirmed via SmartRecruiters"
-          : "Application submitted via SmartRecruiters",
+          : `SmartRecruiters form submitted but not confirmed (errors: ${hasErrors})`,
       };
     }
 
@@ -3006,12 +3033,16 @@ async function applyICIMS(page: Page, profile: ApplicantProfile): Promise<ApplyR
       await takeScreenshot(page, "icims-post-submit");
 
       const confirmed = await checkForConfirmation(page);
+      const currentUrl = page.url().toLowerCase();
+      const urlConfirmed = currentUrl.includes("thank") || currentUrl.includes("confirm") || currentUrl.includes("success");
+      const hasErrors = await page.locator('[class*="error"], [class*="invalid"], .field-error, .form-error, [role="alert"]').count().catch(() => 0);
+      const isSuccess = (confirmed || urlConfirmed) && hasErrors === 0;
       return {
-        success: confirmed || submitted,
+        success: isSuccess,
         platform: "icims",
-        message: confirmed
+        message: isSuccess
           ? "Application submitted and confirmed via iCIMS"
-          : "Application submitted via iCIMS",
+          : `iCIMS form submitted but not confirmed (errors: ${hasErrors})`,
       };
     }
 

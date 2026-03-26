@@ -34,7 +34,22 @@ const HEALTHCARE_WORKDAY_COMPANIES = [
   { name: "Ensemble Health Partners", subdomain: "ensemblehp", wdInstance: "5", site: "EnsembleHealthPartnersCareers" },
   { name: "Nationwide Children's", subdomain: "nationwidechildrens", wdInstance: "5", site: "NCHCareers" },
   { name: "Memorial Hermann", subdomain: "memorialhermann", wdInstance: "5", site: "External" },
-  { name: "Workday (itself)", subdomain: "workday", wdInstance: "5", site: "Workday" },
+  // === MAJOR HEALTHCARE COMPANIES ===
+  { name: "UnitedHealth Group", subdomain: "uhg", wdInstance: "5", site: "UHGExternalSite" },
+  { name: "Elevance Health", subdomain: "elevancehealth", wdInstance: "5", site: "ElevanceHealthExternalSite" },
+  { name: "CVS Health", subdomain: "cvshealth", wdInstance: "1", site: "CVS_Health_Careers" },
+  { name: "HCA Healthcare", subdomain: "haborhca", wdInstance: "1", site: "HCAExternalCareerSite" },
+  { name: "Kaiser Permanente", subdomain: "kaiperm", wdInstance: "5", site: "External" },
+  { name: "Centene", subdomain: "centene", wdInstance: "5", site: "CenteneCareers" },
+  { name: "Molina Healthcare", subdomain: "molinahealthcare", wdInstance: "5", site: "MolinaExternalSite" },
+  { name: "CommonSpirit Health", subdomain: "commonspirit", wdInstance: "5", site: "External" },
+  { name: "Tenet Healthcare", subdomain: "tenethealth", wdInstance: "1", site: "External" },
+  { name: "Providence Health", subdomain: "providence", wdInstance: "5", site: "External" },
+  { name: "Advocate Health", subdomain: "advocatehealth", wdInstance: "5", site: "External" },
+  { name: "Banner Health", subdomain: "bannerhealth", wdInstance: "5", site: "External" },
+  { name: "Baylor Scott & White", subdomain: "bswhealth", wdInstance: "5", site: "External" },
+  { name: "Change Healthcare", subdomain: "changehealthcare", wdInstance: "5", site: "External" },
+  { name: "R1 RCM", subdomain: "r1rcm", wdInstance: "5", site: "R1RCMCareers" },
 ];
 
 const MAX_PER_COMPANY = 10;
