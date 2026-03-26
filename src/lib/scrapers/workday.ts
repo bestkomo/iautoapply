@@ -23,24 +23,18 @@ interface WorkdayResponse {
   jobPostings?: WorkdayJobPosting[];
 }
 
-// Major healthcare companies with Workday career sites
+// Major healthcare companies with VERIFIED Workday career sites (tested March 2026)
 // Format: { name, subdomain, wdInstance, site }
+// URL pattern: https://{subdomain}.wd{wdInstance}.myworkdayjobs.com/wday/cxs/{subdomain}/{site}/jobs
 const HEALTHCARE_WORKDAY_COMPANIES = [
-  { name: "HCA Healthcare", subdomain: "haborview", wdInstance: "1", site: "HCAHealthcare" },
-  { name: "Centene", subdomain: "centene", wdInstance: "5", site: "Centene" },
-  { name: "Humana", subdomain: "humana", wdInstance: "1", site: "Humana" },
-  { name: "CVS Health", subdomain: "cvshealth", wdInstance: "1", site: "CVS_Health_Careers" },
-  { name: "Cigna", subdomain: "cigna", wdInstance: "1", site: "CignaGlobalCareers" },
-  { name: "UnitedHealth Group", subdomain: "uhg", wdInstance: "1", site: "UHGExternalSite" },
-  { name: "Elevance Health", subdomain: "elevancehealth", wdInstance: "1", site: "ElevanceHealthExternalSite" },
-  { name: "Molina Healthcare", subdomain: "molinahealthcare", wdInstance: "5", site: "MolinaHealthcareCareers" },
-  { name: "Community Health Systems", subdomain: "communityhealth", wdInstance: "1", site: "CHS_Careers" },
-  { name: "Tenet Healthcare", subdomain: "tenethealth", wdInstance: "1", site: "TenetHealthcare" },
-  { name: "AdventHealth", subdomain: "adventhealth", wdInstance: "1", site: "AdventHealthExternalCareerSite" },
-  { name: "Kaiser Permanente", subdomain: "kaiserpermanente", wdInstance: "1", site: "KPCareers" },
-  { name: "Trinity Health", subdomain: "trinityhealth", wdInstance: "1", site: "TrinityHealth" },
-  { name: "Providence", subdomain: "providence", wdInstance: "5", site: "External" },
-  { name: "Ascension", subdomain: "ascension", wdInstance: "1", site: "AscensionExternalCareers" },
+  // === VERIFIED WORKING (tested March 2026, returns 200 + job results) ===
+  { name: "Humana", subdomain: "humana", wdInstance: "5", site: "Humana_External_Career_Site" },
+  { name: "Cigna / The Cigna Group", subdomain: "cigna", wdInstance: "5", site: "cignacareers" },
+  { name: "Jefferson Health", subdomain: "jeffersonhealth", wdInstance: "5", site: "ThomasJeffersonExternal" },
+  { name: "Ensemble Health Partners", subdomain: "ensemblehp", wdInstance: "5", site: "EnsembleHealthPartnersCareers" },
+  { name: "Nationwide Children's", subdomain: "nationwidechildrens", wdInstance: "5", site: "NCHCareers" },
+  { name: "Memorial Hermann", subdomain: "memorialhermann", wdInstance: "5", site: "External" },
+  { name: "Workday (itself)", subdomain: "workday", wdInstance: "5", site: "Workday" },
 ];
 
 const MAX_PER_COMPANY = 10;
@@ -111,10 +105,8 @@ export class WorkdayScraper extends BaseScraper {
       clearTimeout(timeout);
 
       if (!response.ok) {
-        // Don't log errors for 403/404 — many companies have different URL patterns
-        if (response.status !== 403 && response.status !== 404) {
-          console.warn(`[Workday] ${company.name}: API returned ${response.status}`);
-        }
+        // Log all errors to help debug URL patterns
+        console.warn(`[Workday] ${company.name}: API returned ${response.status} for ${apiUrl}`);
         return [];
       }
 
