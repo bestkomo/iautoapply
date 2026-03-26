@@ -208,6 +208,19 @@ export async function POST() {
 
   // Build job search filters from preferences
   const excludeCompanies = fromJsonArray(preferences.excludeCompanies as string);
+
+  // Build title keyword filter from desired titles
+  // Extract key words from each desired title to match relevant jobs
+  const titleKeywords: string[] = [];
+  for (const title of desiredTitles) {
+    // Split into meaningful words (skip common filler words)
+    const words = title.toLowerCase().split(/\s+/).filter(w =>
+      w.length > 2 && !["the", "and", "for", "with", "job", "role"].includes(w)
+    );
+    titleKeywords.push(...words);
+  }
+  const uniqueKeywords = [...new Set(titleKeywords)];
+
   const jobs = await prisma.job.findMany({
     where: {
       isActive: true,
@@ -217,9 +230,18 @@ export async function POST() {
       ...(excludeCompanies.length > 0
         ? { company: { notIn: excludeCompanies } }
         : {}),
+      // Filter by title keywords - job must contain at least one keyword from desired titles
+      ...(uniqueKeywords.length > 0
+        ? {
+            OR: uniqueKeywords.map((kw) => ({
+              title: { contains: kw, mode: "insensitive" as const },
+            })),
+          }
+        : {}),
     },
     take: 200,
   });
+  console.log(`[AutoApply] Title keywords filter: [${uniqueKeywords.join(", ")}], found ${jobs.length} jobs`);
 
   // Known ATS domains where Playwright can actually fill out application forms
   const ATS_DOMAINS = [
@@ -273,7 +295,10 @@ export async function POST() {
     console.log("[AutoApply] Sample URLs:", applyableJobs.slice(0, 5).map(j => `${j.title} -> ${j.applyUrl}`));
   }
 
-  // Score and sort jobs — use low threshold (5%) to maximize matches
+  // Score and sort jobs — minimum 30% match to ensure relevance
+  const minScore = (preferences as Record<string, unknown>).minMatchScore
+    ? Number((preferences as Record<string, unknown>).minMatchScore)
+    : 30;
   const scoredJobs = applyableJobs
     .map((job) => {
       try {
@@ -284,7 +309,7 @@ export async function POST() {
         return { job, score: 0 };
       }
     })
-    .filter((item) => item.score >= 5)
+    .filter((item) => item.score >= minScore)
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.min(remaining, 3)); // Max 3 at a time, run sequentially to prevent OOM on 512MB
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
