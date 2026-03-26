@@ -276,8 +276,12 @@ export async function POST() {
     const url = job.applyUrl.toLowerCase();
     // Block known aggregator/redirect sites
     if (BLOCKED_DOMAINS.some((d) => url.includes(d))) return false;
-    // PREFER jobs with known ATS URLs (these are most likely to work)
-    // But also accept company career pages (they might have forms)
+    // ONLY accept jobs with known ATS URLs — generic pages almost never work
+    const isATS = ATS_DOMAINS.some((d) => url.includes(d));
+    if (!isATS) {
+      console.log(`[AutoApply] Skipping non-ATS URL: ${url.substring(0, 80)}...`);
+      return false;
+    }
     return true;
   });
 
