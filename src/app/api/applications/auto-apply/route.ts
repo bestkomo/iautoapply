@@ -6,9 +6,10 @@ import { prisma } from "@/lib/db/prisma";
 import { fromJsonArray } from "@/lib/db/json-array";
 import { computeMatchScore } from "@/lib/matching/job-matcher";
 import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
-import { getResumeFilePath } from "@/lib/automation/resume-file";
+import { getResumeFilePath, saveResumeFile } from "@/lib/automation/resume-file";
 import { canAutoApply } from "@/lib/stripe/check-subscription";
 import { getScraperManager } from "@/lib/scrapers/scraper-manager";
+import { existsSync } from "fs";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -297,7 +298,39 @@ export async function POST() {
   const nameParts = (user?.name || "").split(" ");
   const firstName = nameParts[0] || "";
   const lastName = nameParts.slice(1).join(" ") || "";
-  const resumePath = getResumeFilePath(session.user.id);
+  let resumePath = getResumeFilePath(session.user.id);
+
+  // If resume file doesn't exist (lost after deploy), generate a simple one from profile data
+  if (!resumePath || !existsSync(resumePath)) {
+    console.log("[AutoApply] Resume file not found on disk, generating from profile data...");
+    try {
+      const resumeLines = [
+        user?.name || "Applicant",
+        "",
+        `Email: ${userProfile?.email || user?.email || ""}`,
+        userProfile?.phone ? `Phone: ${userProfile.phone}` : "",
+        userProfile?.location ? `Location: ${userProfile.location}` : "",
+        userProfile?.linkedinUrl ? `LinkedIn: ${userProfile.linkedinUrl}` : "",
+        "",
+        "--- Professional Summary ---",
+        userProfile?.summary || "Experienced healthcare professional seeking new opportunities.",
+        "",
+        "--- Skills ---",
+        userProfile?.headline || "Healthcare, Insurance Verification, Patient Access, Epic EHR, Medical Terminology",
+        "",
+      ].filter(Boolean).join("\n");
+
+      // Save as a simple .txt file (most ATS accept .txt)
+      const resumeBuffer = Buffer.from(resumeLines, "utf-8");
+      resumePath = await saveResumeFile(session.user.id, resumeBuffer, "resume.txt");
+      console.log(`[AutoApply] Generated resume file at: ${resumePath}`);
+    } catch (err) {
+      console.error("[AutoApply] Failed to generate resume:", err);
+      resumePath = null;
+    }
+  } else {
+    console.log(`[AutoApply] Resume file found: ${resumePath}`);
+  }
 
   // Prefer resume/profile email over OAuth email for job applications
   // The OAuth email (e.g. Google account) may differ from the contact email on the resume
