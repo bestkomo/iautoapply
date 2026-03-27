@@ -556,7 +556,7 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
         }
       }
 
-      // Handle React Select custom dropdowns - broader selectors
+      // Handle React Select custom dropdowns - context-aware
       const reactSelectSelectors = [
         '[class*="select__placeholder"]',
         '[class*="Select__placeholder"]',
@@ -571,47 +571,147 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
           console.log(`[Playwright] Greenhouse: Found ${reactSelectCount} React Select dropdowns via ${reactSel}`);
           for (let i = 0; i < reactSelectCount; i++) {
             try {
-              // Click the React Select container (parent of placeholder)
               const placeholder = reactSelects.nth(i);
+
+              // Get the context: find the closest label or question text
+              const contextText = await placeholder.evaluate((el: Element) => {
+                // Walk up to find a label, fieldset legend, or nearby text
+                let node: Element | null = el;
+                for (let depth = 0; depth < 8 && node; depth++) {
+                  node = node.parentElement;
+                  if (!node) break;
+                  // Check for a label within this container
+                  const label = node.querySelector('label, legend, .field-label, [class*="label"]');
+                  if (label && label.textContent && label.textContent.trim().length > 3) {
+                    return label.textContent.trim().toLowerCase();
+                  }
+                  // Check for a preceding sibling with text
+                  const prev = node.previousElementSibling;
+                  if (prev && prev.textContent && prev.textContent.trim().length > 3) {
+                    return prev.textContent.trim().toLowerCase();
+                  }
+                }
+                return "";
+              }).catch(() => "");
+
+              console.log(`[Playwright] Greenhouse: React Select ${i} context: "${contextText.substring(0, 80)}"`);
+
+              // Click the React Select container
               const container = placeholder.locator('..').first();
               await container.click();
               await page.waitForTimeout(800);
 
-              // Try clicking "Decline" / "I do not wish to answer" / "Prefer not" options
-              const declineSelectors = [
-                '[class*="select__option"]:has-text("Decline")',
-                '[class*="select__option"]:has-text("do not wish")',
-                '[class*="select__option"]:has-text("prefer not")',
-                '[class*="option"]:has-text("Decline")',
-                '[class*="option"]:has-text("do not wish")',
-                '[role="option"]:has-text("Decline")',
-                '[role="option"]:has-text("do not wish")',
-              ];
               let clicked = false;
-              for (const dSel of declineSelectors) {
-                const opt = page.locator(dSel).first();
-                if (await opt.isVisible({ timeout: 500 }).catch(() => false)) {
-                  await opt.click();
+
+              // Context-aware option selection
+              if (contextText.includes("compensation") || contextText.includes("salary") || contextText.includes("pay")) {
+                // Pick a salary range — try $35k-$40k or any mid-range option
+                const salarySelectors = [
+                  '[class*="option"]:has-text("35")',
+                  '[class*="option"]:has-text("40")',
+                  '[class*="option"]:has-text("30")',
+                  '[class*="option"]:has-text("50")',
+                  '[role="option"]:has-text("35")',
+                  '[role="option"]:has-text("40")',
+                  '[role="option"]:has-text("30")',
+                  '[role="option"]:has-text("50")',
+                ];
+                for (const sSel of salarySelectors) {
+                  const opt = page.locator(sSel).first();
+                  if (await opt.isVisible({ timeout: 400 }).catch(() => false)) {
+                    await opt.click();
+                    clicked = true;
+                    console.log(`[Playwright] Greenhouse: Selected salary option for React Select ${i}`);
+                    break;
+                  }
+                }
+                // If no salary number found, pick second option (usually first real range)
+                if (!clicked) {
+                  const allOpts = page.locator('[class*="select__option"], [role="option"]');
+                  const optCount = await allOpts.count();
+                  if (optCount > 1) {
+                    await allOpts.nth(1).click();
+                    clicked = true;
+                    console.log(`[Playwright] Greenhouse: Selected 2nd salary option for React Select ${i}`);
+                  }
+                }
+              } else if (contextText.includes("sponsorship") || contextText.includes("visa") || contextText.includes("h-1b") || contextText.includes("immigration")) {
+                // No sponsorship needed
+                const noSelectors = [
+                  '[class*="option"]:has-text("No")',
+                  '[role="option"]:has-text("No")',
+                  '[class*="option"]:has-text("will not")',
+                  '[role="option"]:has-text("will not")',
+                ];
+                for (const nSel of noSelectors) {
+                  const opt = page.locator(nSel).first();
+                  if (await opt.isVisible({ timeout: 400 }).catch(() => false)) {
+                    await opt.click();
+                    clicked = true;
+                    console.log(`[Playwright] Greenhouse: Selected "No" for sponsorship React Select ${i}`);
+                    break;
+                  }
+                }
+              } else if (contextText.includes("experience") || contextText.includes("years")) {
+                // Select 5+ years or "Yes"
+                const expSelectors = [
+                  '[class*="option"]:has-text("5")',
+                  '[class*="option"]:has-text("Yes")',
+                  '[role="option"]:has-text("5")',
+                  '[role="option"]:has-text("Yes")',
+                  '[class*="option"]:has-text("3")',
+                  '[role="option"]:has-text("3")',
+                ];
+                for (const eSel of expSelectors) {
+                  const opt = page.locator(eSel).first();
+                  if (await opt.isVisible({ timeout: 400 }).catch(() => false)) {
+                    await opt.click();
+                    clicked = true;
+                    console.log(`[Playwright] Greenhouse: Selected experience answer for React Select ${i}`);
+                    break;
+                  }
+                }
+              } else if (contextText.includes("authorized") || contextText.includes("eligible") || contextText.includes("right to work") || contextText.includes("legally")) {
+                // Yes — authorized to work
+                const yesOpt = page.locator('[class*="select__option"]:has-text("Yes"), [role="option"]:has-text("Yes")').first();
+                if (await yesOpt.isVisible({ timeout: 400 }).catch(() => false)) {
+                  await yesOpt.click();
                   clicked = true;
-                  console.log(`[Playwright] Greenhouse: Clicked decline option for React Select ${i}`);
-                  break;
+                  console.log(`[Playwright] Greenhouse: Selected "Yes" for authorization React Select ${i}`);
                 }
               }
 
-              // Try "Yes" for work authorization
+              // Fallback: try Decline/prefer not, then Yes, then first option
+              if (!clicked) {
+                const declineSelectors = [
+                  '[class*="select__option"]:has-text("Decline")',
+                  '[class*="select__option"]:has-text("do not wish")',
+                  '[class*="select__option"]:has-text("prefer not")',
+                  '[class*="option"]:has-text("Decline")',
+                  '[role="option"]:has-text("Decline")',
+                  '[role="option"]:has-text("do not wish")',
+                ];
+                for (const dSel of declineSelectors) {
+                  const opt = page.locator(dSel).first();
+                  if (await opt.isVisible({ timeout: 400 }).catch(() => false)) {
+                    await opt.click();
+                    clicked = true;
+                    console.log(`[Playwright] Greenhouse: Clicked decline for React Select ${i}`);
+                    break;
+                  }
+                }
+              }
               if (!clicked) {
                 const yesOpt = page.locator('[class*="select__option"]:has-text("Yes"), [role="option"]:has-text("Yes")').first();
-                if (await yesOpt.isVisible({ timeout: 500 }).catch(() => false)) {
+                if (await yesOpt.isVisible({ timeout: 400 }).catch(() => false)) {
                   await yesOpt.click();
                   clicked = true;
                   console.log(`[Playwright] Greenhouse: Clicked "Yes" for React Select ${i}`);
                 }
               }
-
               if (!clicked) {
-                // Just pick the first visible option
                 const firstOpt = page.locator('[class*="select__option"], [role="option"]').first();
-                if (await firstOpt.isVisible({ timeout: 500 }).catch(() => false)) {
+                if (await firstOpt.isVisible({ timeout: 400 }).catch(() => false)) {
                   await firstOpt.click();
                   console.log(`[Playwright] Greenhouse: Clicked first option for React Select ${i}`);
                 }
@@ -619,7 +719,7 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
               await page.waitForTimeout(300);
             } catch { /* skip */ }
           }
-          break; // Only use the first matching selector set
+          break;
         }
       }
 
@@ -842,8 +942,8 @@ async function fillGreenhouseCommonFields(page: Page, profile: ApplicantProfile)
         answer: "No",
       },
       {
-        patterns: ["salary expectation", "desired salary", "expected salary", "compensation expectation"],
-        answer: "Negotiable",
+        patterns: ["salary expectation", "desired salary", "expected salary", "compensation expectation", "desired compensation", "compensation range", "pay expectation"],
+        answer: "$35,000 - $40,000",
       },
       {
         patterns: ["years of experience", "how many years"],
