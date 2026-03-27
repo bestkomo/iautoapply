@@ -671,13 +671,45 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
                     break;
                   }
                 }
-              } else if (contextText.includes("authorized") || contextText.includes("eligible") || contextText.includes("right to work") || contextText.includes("legally")) {
-                // Yes — authorized to work
-                const yesOpt = page.locator('[class*="select__option"]:has-text("Yes"), [role="option"]:has-text("Yes")').first();
-                if (await yesOpt.isVisible({ timeout: 400 }).catch(() => false)) {
-                  await yesOpt.click();
-                  clicked = true;
-                  console.log(`[Playwright] Greenhouse: Selected "Yes" for authorization React Select ${i}`);
+              } else if (contextText.includes("authorized") || contextText.includes("eligible") || contextText.includes("right to work") || contextText.includes("legally") || contextText.includes("source of your right")) {
+                // Work authorization — try "US Citizen", "Citizen", "Yes", or first option
+                const authSelectors = [
+                  '[class*="option"]:has-text("Citizen")',
+                  '[role="option"]:has-text("Citizen")',
+                  '[class*="option"]:has-text("US")',
+                  '[role="option"]:has-text("US")',
+                  '[class*="option"]:has-text("Yes")',
+                  '[role="option"]:has-text("Yes")',
+                  '[class*="option"]:has-text("authorized")',
+                  '[role="option"]:has-text("authorized")',
+                ];
+                for (const aSel of authSelectors) {
+                  const opt = page.locator(aSel).first();
+                  if (await opt.isVisible({ timeout: 400 }).catch(() => false)) {
+                    await opt.click();
+                    clicked = true;
+                    console.log(`[Playwright] Greenhouse: Selected work auth option for React Select ${i}`);
+                    break;
+                  }
+                }
+              } else if (contextText.includes("gender") || contextText.includes("self-identification")) {
+                // Gender — prefer not to say / decline
+                const genderSelectors = [
+                  '[class*="option"]:has-text("Decline")',
+                  '[role="option"]:has-text("Decline")',
+                  '[class*="option"]:has-text("prefer not")',
+                  '[role="option"]:has-text("prefer not")',
+                  '[class*="option"]:has-text("do not wish")',
+                  '[role="option"]:has-text("do not wish")',
+                ];
+                for (const gSel of genderSelectors) {
+                  const opt = page.locator(gSel).first();
+                  if (await opt.isVisible({ timeout: 400 }).catch(() => false)) {
+                    await opt.click();
+                    clicked = true;
+                    console.log(`[Playwright] Greenhouse: Selected decline for gender React Select ${i}`);
+                    break;
+                  }
                 }
               }
 
@@ -970,7 +1002,7 @@ async function fillGreenhouseCommonFields(page: Page, profile: ApplicantProfile)
         answer: "United States",
       },
       {
-        patterns: ["gender", "pronouns"],
+        patterns: ["gender", "pronouns", "self-identification of gender"],
         answer: "Prefer not to say",
       },
       {
@@ -984,6 +1016,34 @@ async function fillGreenhouseCommonFields(page: Page, profile: ApplicantProfile)
       {
         patterns: ["disability", "disabled"],
         answer: "I do not wish to answer",
+      },
+      {
+        patterns: ["preferred first name", "preferred name", "nickname", "goes by"],
+        answer: profile.firstName || "N/A",
+      },
+      {
+        patterns: ["location", "city", "current city", "where are you located", "your city"],
+        answer: profile.location?.split(",")[0]?.trim() || "Houston",
+      },
+      {
+        patterns: ["right to work", "source of your right", "work permit", "work eligibility"],
+        answer: "US Citizen",
+      },
+      {
+        patterns: ["current company", "current employer"],
+        answer: "Open to opportunities",
+      },
+      {
+        patterns: ["notice period", "how soon"],
+        answer: "Immediately",
+      },
+      {
+        patterns: ["linkedin", "linkedin url", "linkedin profile"],
+        answer: profile.linkedinUrl || "https://linkedin.com/in/applicant",
+      },
+      {
+        patterns: ["website", "portfolio", "personal site"],
+        answer: profile.portfolioUrl || "N/A",
       },
     ];
 
