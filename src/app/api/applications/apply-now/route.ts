@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
 import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { getResumeFilePath } from "@/lib/automation/resume-file";
+import { getApplyEmail } from "@/lib/email/apply-email";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -79,6 +80,9 @@ export async function POST(req: Request) {
     // The OAuth email (e.g. Google account) may differ from the contact email on the resume
     const applicationEmail = userProfile?.email || user?.email || "";
 
+    // Fetch generated apply email for ATS account creation (Workday, etc.)
+    const applyEmailCreds = await getApplyEmail(session.user.id);
+
     const profile: ApplicantProfile = {
       name: user?.name || "",
       firstName,
@@ -89,6 +93,8 @@ export async function POST(req: Request) {
       linkedinUrl: userProfile?.linkedinUrl || undefined,
       portfolioUrl: userProfile?.portfolioUrl || undefined,
       resumePath: resumePath || undefined,
+      applyEmail: applyEmailCreds?.address,
+      applyEmailPassword: applyEmailCreds?.password,
     };
 
     // Run automation in the background (don't block the API response)

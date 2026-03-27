@@ -8,6 +8,7 @@ import { computeMatchScore } from "@/lib/matching/job-matcher";
 import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { getResumeFilePath, saveResumeFile } from "@/lib/automation/resume-file";
 import { canAutoApply } from "@/lib/stripe/check-subscription";
+import { getApplyEmail } from "@/lib/email/apply-email";
 import { getScraperManager } from "@/lib/scrapers/scraper-manager";
 import { existsSync } from "fs";
 
@@ -365,6 +366,9 @@ export async function POST() {
   // The OAuth email (e.g. Google account) may differ from the contact email on the resume
   const applicationEmail = userProfile?.email || user?.email || "";
 
+  // Fetch generated apply email for ATS account creation (Workday, etc.)
+  const applyEmailCreds = await getApplyEmail(session.user.id);
+
   const applicantProfile: ApplicantProfile = {
     name: user?.name || "",
     firstName,
@@ -375,6 +379,8 @@ export async function POST() {
     linkedinUrl: userProfile?.linkedinUrl || undefined,
     portfolioUrl: userProfile?.portfolioUrl || undefined,
     resumePath: resumePath || undefined,
+    applyEmail: applyEmailCreds?.address,
+    applyEmailPassword: applyEmailCreds?.password,
   };
 
   // Create Application records and collect automation tasks (don't start yet)

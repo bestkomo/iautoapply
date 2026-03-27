@@ -35,7 +35,7 @@ interface InboxItem {
   preview: string;
   status: "confirmed" | "interview" | "rejected" | "pending";
   company: string;
-  source: "gmail" | "application";
+  source: "gmail" | "application" | "apply-email";
 }
 
 /* ------------------------------------------------------------------ */
@@ -104,6 +104,37 @@ function formatDate(dateStr: string): string {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Apply-email helpers                                                */
+/* ------------------------------------------------------------------ */
+
+function mapCategory(
+  cat: string
+): "confirmed" | "interview" | "rejected" | "pending" {
+  switch (cat) {
+    case "confirmation":
+      return "confirmed";
+    case "interview":
+      return "interview";
+    case "rejection":
+      return "rejected";
+    default:
+      return "pending";
+  }
+}
+
+function extractCompany(email: string, name?: string): string {
+  if (name && !name.includes("@")) return name;
+  // Try to extract company from email domain (e.g. "noreply@myworkday.com" → "Workday")
+  const domain = email.split("@")[1] || "";
+  const parts = domain.split(".");
+  if (parts.length >= 2) {
+    const company = parts[parts.length - 2];
+    return company.charAt(0).toUpperCase() + company.slice(1);
+  }
+  return email;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Page                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -114,18 +145,52 @@ export default function InboxPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedItem, setSelectedItem] = useState<InboxItem | null>(null);
   const [gmailConnected, setGmailConnected] = useState(false);
+  const [applyEmail, setApplyEmail] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const limit = 20;
 
   const fetchInbox = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/inbox");
-      if (res.ok) {
-        const data = await res.json();
-        setItems(data.items || []);
+      // Fetch from both sources in parallel
+      const [inboxRes, applyInboxRes] = await Promise.all([
+        fetch("/api/inbox"),
+        fetch("/api/apply-email/inbox"),
+      ]);
+
+      let allItems: InboxItem[] = [];
+
+      if (inboxRes.ok) {
+        const data = await inboxRes.json();
+        allItems = [...(data.items || [])];
         setGmailConnected(data.gmailConnected || false);
       }
+
+      if (applyInboxRes.ok) {
+        const applyData = await applyInboxRes.json();
+        setApplyEmail(applyData.applyEmail || null);
+
+        // Map apply-email inbox items to InboxItem format
+        if (applyData.emails?.length) {
+          const applyItems: InboxItem[] = applyData.emails.map(
+            (email: { uid: number; from: string; fromName: string; subject: string; date: string; bodyText: string; category: string }) => ({
+              id: `apply-${email.uid}`,
+              from: email.from,
+              subject: email.subject,
+              date: email.date,
+              preview: (email.bodyText || "").slice(0, 200),
+              status: mapCategory(email.category),
+              company: extractCompany(email.from, email.fromName),
+              source: "apply-email" as const,
+            })
+          );
+          allItems = [...allItems, ...applyItems];
+        }
+      }
+
+      // Sort all items by date, newest first
+      allItems.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setItems(allItems);
     } catch {
       // handle silently
     } finally {
@@ -187,23 +252,34 @@ export default function InboxPage() {
             Track your application responses and status updates
           </p>
         </div>
-        {!gmailConnected && (
-          <a href="/api/auth/gmail">
-            <Button className="gap-2">
-              <Mail className="h-4 w-4" />
-              Connect Gmail
-            </Button>
-          </a>
-        )}
-        {gmailConnected && (
-          <Badge
-            variant="secondary"
-            className="gap-1.5 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Gmail Connected
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {applyEmail && (
+            <Badge
+              variant="secondary"
+              className="gap-1.5 bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+            >
+              <Mail className="h-3.5 w-3.5" />
+              {applyEmail}
+            </Badge>
+          )}
+          {!gmailConnected && (
+            <a href="/api/auth/gmail">
+              <Button className="gap-2" size="sm">
+                <Mail className="h-4 w-4" />
+                Connect Gmail
+              </Button>
+            </a>
+          )}
+          {gmailConnected && (
+            <Badge
+              variant="secondary"
+              className="gap-1.5 bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Gmail Connected
+            </Badge>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -263,8 +339,8 @@ export default function InboxPage() {
               </div>
               <h3 className="font-semibold">No messages found</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                {!gmailConnected
-                  ? "Connect your Gmail to see application responses"
+                {!gmailConnected && !applyEmail
+                  ? "Connect Gmail or upgrade to PRO to get your application inbox"
                   : activeTab !== "all"
                     ? "Try a different filter or check the All tab"
                     : "No application-related emails found yet"}
@@ -318,6 +394,15 @@ export default function InboxPage() {
                           >
                             <Mail className="h-3 w-3" />
                             Gmail
+                          </Badge>
+                        )}
+                        {item.source === "apply-email" && (
+                          <Badge
+                            variant="outline"
+                            className="text-xs text-purple-600 dark:text-purple-400 border-purple-200 dark:border-purple-800 gap-1"
+                          >
+                            <Mail className="h-3 w-3" />
+                            Apply Inbox
                           </Badge>
                         )}
                       </div>
@@ -424,6 +509,11 @@ export default function InboxPage() {
                       <>
                         <Mail className="h-3.5 w-3.5" />
                         Via Gmail
+                      </>
+                    ) : selectedItem.source === "apply-email" ? (
+                      <>
+                        <Mail className="h-3.5 w-3.5" />
+                        Apply Inbox
                       </>
                     ) : (
                       <>

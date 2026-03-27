@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe/stripe";
 import { prisma } from "@/lib/db/prisma";
 import Stripe from "stripe";
+import { createApplyEmail } from "@/lib/email/apply-email";
 
 export const runtime = "nodejs";
 
@@ -74,6 +75,19 @@ export async function POST(req: Request) {
         console.log(
           `[Stripe Webhook] checkout.session.completed: userId=${userId}, plan=${plan}`
         );
+
+        // Auto-create apply email for paid subscribers
+        if (plan !== "FREE") {
+          try {
+            const applyEmail = await createApplyEmail(userId);
+            if (applyEmail) {
+              console.log(`[Stripe Webhook] Created apply email: ${applyEmail.address} for userId=${userId}`);
+            }
+          } catch (err) {
+            console.error("[Stripe Webhook] Failed to create apply email:", err);
+            // Non-fatal — user can create manually later
+          }
+        }
         break;
       }
 

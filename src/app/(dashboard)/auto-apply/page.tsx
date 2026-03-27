@@ -45,6 +45,7 @@ import {
   Send,
   Briefcase,
   ExternalLink,
+  Mail,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -254,6 +255,8 @@ export default function AutoApplyPage() {
   const [appliedApps, setAppliedApps] = useState<InboxApplication[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
   const [appliedLoading, setAppliedLoading] = useState(false);
+  const [applyEmail, setApplyEmail] = useState<string | null>(null);
+  const [creatingEmail, setCreatingEmail] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -298,9 +301,37 @@ export default function AutoApplyPage() {
     }
   }, []);
 
+  const fetchApplyEmail = useCallback(async () => {
+    try {
+      const res = await fetch("/api/apply-email");
+      if (res.ok) {
+        const data = await res.json();
+        setApplyEmail(data.applyEmail || null);
+      }
+    } catch {
+      // handle silently
+    }
+  }, []);
+
+  async function handleCreateApplyEmail() {
+    setCreatingEmail(true);
+    try {
+      const res = await fetch("/api/apply-email", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setApplyEmail(data.applyEmail);
+      }
+    } catch {
+      // handle silently
+    } finally {
+      setCreatingEmail(false);
+    }
+  }
+
   useEffect(() => {
     fetchStatus();
-  }, [fetchStatus]);
+    fetchApplyEmail();
+  }, [fetchStatus, fetchApplyEmail]);
 
   useEffect(() => {
     if (activeTab === "inbox") fetchInbox();
@@ -651,6 +682,63 @@ export default function AutoApplyPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* -------- Apply Email Card -------- */}
+      <Card>
+        <CardContent className="p-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className={`flex h-12 w-12 items-center justify-center rounded-full ${
+                applyEmail
+                  ? "bg-purple-100 dark:bg-purple-900/30"
+                  : "bg-muted"
+              }`}>
+                <Mail className={`h-6 w-6 ${
+                  applyEmail
+                    ? "text-purple-600 dark:text-purple-400"
+                    : "text-muted-foreground"
+                }`} />
+              </div>
+              <div>
+                <h3 className="font-semibold">Application Email</h3>
+                {applyEmail ? (
+                  <p className="text-sm text-muted-foreground">
+                    <span className="font-mono text-purple-600 dark:text-purple-400">{applyEmail}</span>
+                    {" "}&mdash; Used for Workday applications & verification
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Get a dedicated email for job applications. All confirmations land in your inbox.
+                  </p>
+                )}
+              </div>
+            </div>
+            {!applyEmail && (
+              <Button
+                onClick={handleCreateApplyEmail}
+                disabled={creatingEmail}
+                variant="outline"
+                className="gap-2"
+              >
+                {creatingEmail ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                Create Email
+              </Button>
+            )}
+            {applyEmail && (
+              <Link href="/inbox">
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Inbox className="h-4 w-4" />
+                  View Inbox
+                </Button>
+              </Link>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* -------- Preferences + Credits Row -------- */}
       <div className="grid gap-6 lg:grid-cols-2">

@@ -33,6 +33,7 @@ model User {
   preferences  JobPreference?
   subscription Subscription?
   aiUsage      AIUsageLog[]
+  applyEmail   ApplyEmail?
 }
 
 model Account {
@@ -310,6 +311,19 @@ model Subscription {
   stripeSubId      String?
   currentPeriodEnd DateTime?
   createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Apply Email (Dedicated email for job applications) ─────────────────
+
+model ApplyEmail {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  address   String   @unique
+  localPart String
+  password  String
+  createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

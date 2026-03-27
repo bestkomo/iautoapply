@@ -16,6 +16,8 @@ export interface ApplicantProfile {
   linkedinUrl?: string;
   portfolioUrl?: string;
   resumePath?: string; // Absolute path to resume PDF file on disk
+  applyEmail?: string; // Generated @apply.iautoaply.com email for ATS accounts
+  applyEmailPassword?: string; // Password for the apply email (for Workday account creation)
 }
 
 export interface ApplyResult {
@@ -1276,8 +1278,11 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
     await stepDelay();
 
     // Step 3: Handle "Create Account" / "Sign In" / "Continue as Guest"
-    console.log("[Playwright] Workday: Handling account creation/sign-in");
-    await handleWorkdayAccountPage(page, profile.email);
+    // Use generated apply email for Workday account (if available), fallback to personal email
+    const workdayEmail = profile.applyEmail || profile.email;
+    const workdayPassword = profile.applyEmailPassword || WORKDAY_PASSWORD;
+    console.log(`[Playwright] Workday: Handling account creation/sign-in with email: ${workdayEmail}`);
+    await handleWorkdayAccountPage(page, workdayEmail, workdayPassword, profile);
     await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
     await stepDelay();
 
@@ -1487,7 +1492,8 @@ async function handleWorkdayMethodDialog(page: Page) {
  * Handle Workday's "Create Account" or "Sign In" page.
  * Priority: Continue as Guest > Create Account > Sign In
  */
-async function handleWorkdayAccountPage(page: Page, email?: string) {
+async function handleWorkdayAccountPage(page: Page, email?: string, password?: string, profile?: ApplicantProfile) {
+  const accountPassword = password || WORKDAY_PASSWORD;
   // First, try "Continue as Guest" options
   const guestSelectors = [
     'button:has-text("Continue as Guest")',
@@ -1728,7 +1734,7 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
               await field.click();
               await humanDelay();
               await field.clear();
-              await field.pressSequentially(WORKDAY_PASSWORD, { delay: 50 });
+              await field.pressSequentially(accountPassword, { delay: 50 });
               await humanDelay();
               console.log(`[Playwright] Workday: Filled password via label #${forAttr}`);
             }
@@ -1743,7 +1749,7 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
       await passwordInputs.nth(0).click();
       await humanDelay();
       await passwordInputs.nth(0).clear();
-      await passwordInputs.nth(0).pressSequentially(WORKDAY_PASSWORD, { delay: 30 });
+      await passwordInputs.nth(0).pressSequentially(accountPassword, { delay: 30 });
       await humanDelay();
       console.log("[Playwright] Workday: First password field filled");
 
@@ -1751,7 +1757,7 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
       await passwordInputs.nth(1).click();
       await humanDelay();
       await passwordInputs.nth(1).clear();
-      await passwordInputs.nth(1).pressSequentially(WORKDAY_PASSWORD, { delay: 30 });
+      await passwordInputs.nth(1).pressSequentially(accountPassword, { delay: 30 });
       await humanDelay();
       console.log("[Playwright] Workday: Filled both password fields for account creation");
     } else if (passwordCount === 1) {
@@ -1760,7 +1766,7 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
       await passwordInputs.nth(0).click();
       await humanDelay();
       await passwordInputs.nth(0).clear();
-      await passwordInputs.nth(0).pressSequentially(WORKDAY_PASSWORD, { delay: 30 });
+      await passwordInputs.nth(0).pressSequentially(accountPassword, { delay: 30 });
       await humanDelay();
       console.log("[Playwright] Workday: Filled password field for sign-in");
     } else {
@@ -1865,7 +1871,7 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
     await takeScreenshot(page, "workday-after-create-account");
 
     // Check if Workday is asking for an email verification code
-    await handleWorkdayVerificationCode(page);
+    await handleWorkdayVerificationCode(page, profile);
   }
 
   // If Create Account failed or wasn't found, try Sign In
@@ -1919,7 +1925,7 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
           const pwInput = page.locator('input[data-automation-id="password"], input[type="password"]').first();
           if (await pwInput.isVisible({ timeout: 3000 }).catch(() => false)) {
             await pwInput.clear();
-            await pwInput.fill(WORKDAY_PASSWORD);
+            await pwInput.fill(accountPassword);
             await humanDelay();
           }
         } catch { /* non-critical */ }
@@ -1951,9 +1957,10 @@ async function handleWorkdayAccountPage(page: Page, email?: string) {
 /**
  * Handle Workday's email verification code step.
  * After creating an account, Workday sometimes sends a verification code email.
- * This function detects the verification prompt and fetches the code from Gmail.
+ * This function detects the verification prompt and fetches the code via IMAP
+ * from the user's generated apply email.
  */
-async function handleWorkdayVerificationCode(page: Page) {
+async function handleWorkdayVerificationCode(page: Page, profile?: ApplicantProfile) {
   const pageText = await page.textContent("body").catch(() => "") || "";
   const pageTextLower = pageText.toLowerCase();
 
@@ -1971,59 +1978,60 @@ async function handleWorkdayVerificationCode(page: Page) {
     return;
   }
 
-  console.log("[Playwright] Workday: VERIFICATION CODE step detected! Attempting to read from Gmail...");
+  console.log("[Playwright] Workday: VERIFICATION CODE step detected!");
   await takeScreenshot(page, "workday-verification-code-prompt");
 
-  // Try to fetch the verification code from Gmail via our internal API
+  // Need apply email credentials to fetch verification code via IMAP
+  if (!profile?.applyEmail || !profile?.applyEmailPassword) {
+    console.log("[Playwright] Workday: No apply email credentials — cannot fetch verification code");
+    return;
+  }
+
+  console.log(`[Playwright] Workday: Fetching verification code from ${profile.applyEmail} via IMAP...`);
+
   try {
-    const baseUrl = process.env.NEXTAUTH_URL || "http://localhost:3001";
-    const response = await fetch(`${baseUrl}/api/auth/gmail/verification-code?domain=workday.com&maxWait=60`, {
-      headers: { "Cookie": "" }, // This won't have a session — we need a different approach
-    });
+    // Dynamic import to avoid loading IMAP module when not needed
+    const { fetchVerificationCode } = await import("@/lib/email/imap-client");
+    const code = await fetchVerificationCode(profile.applyEmail, profile.applyEmailPassword, 90);
 
-    if (response.ok) {
-      const data = await response.json();
-      if (data.found && data.code) {
-        console.log(`[Playwright] Workday: Got verification code: ${data.code}`);
+    if (code) {
+      console.log(`[Playwright] Workday: Got verification code: ${code}`);
 
-        // Find the verification code input field
-        const codeSelectors = [
-          'input[data-automation-id="verificationCode"]',
-          'input[data-automation-id="code"]',
-          'input[type="text"][maxlength="6"]',
-          'input[type="number"]',
-          'input[placeholder*="code"]',
-          'input[placeholder*="Code"]',
-          'input[aria-label*="code"]',
-          'input[aria-label*="Code"]',
-        ];
+      // Find the verification code input field
+      const codeSelectors = [
+        'input[data-automation-id="verificationCode"]',
+        'input[data-automation-id="code"]',
+        'input[type="text"][maxlength="6"]',
+        'input[type="number"]',
+        'input[placeholder*="code"]',
+        'input[placeholder*="Code"]',
+        'input[aria-label*="code"]',
+        'input[aria-label*="Code"]',
+      ];
 
-        for (const sel of codeSelectors) {
-          try {
-            const input = page.locator(sel).first();
-            if (await input.isVisible({ timeout: 3000 }).catch(() => false)) {
-              await input.click();
-              await input.clear();
-              await input.pressSequentially(data.code, { delay: 100 });
-              console.log(`[Playwright] Workday: Entered verification code via: ${sel}`);
+      for (const sel of codeSelectors) {
+        try {
+          const input = page.locator(sel).first();
+          if (await input.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await input.click();
+            await input.clear();
+            await input.pressSequentially(code, { delay: 100 });
+            console.log(`[Playwright] Workday: Entered verification code via: ${sel}`);
 
-              // Click Verify/Submit button
-              const verifyBtn = page.locator('button:has-text("Verify"), button:has-text("Submit"), button:has-text("Continue")').first();
-              if (await verifyBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-                await verifyBtn.click();
-                await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-                await stepDelay();
-                console.log("[Playwright] Workday: Verification code submitted");
-              }
-              break;
+            // Click Verify/Submit button
+            const verifyBtn = page.locator('button:has-text("Verify"), button:has-text("Submit"), button:has-text("Continue")').first();
+            if (await verifyBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+              await verifyBtn.click();
+              await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+              await stepDelay();
+              console.log("[Playwright] Workday: Verification code submitted");
             }
-          } catch { /* try next selector */ }
-        }
-      } else {
-        console.log("[Playwright] Workday: No verification code found in Gmail");
+            break;
+          }
+        } catch { /* try next selector */ }
       }
     } else {
-      console.log("[Playwright] Workday: Gmail verification code API returned error");
+      console.log("[Playwright] Workday: No verification code found via IMAP after 90s");
     }
   } catch (err) {
     console.log("[Playwright] Workday: Could not fetch verification code:", err instanceof Error ? err.message : String(err));
