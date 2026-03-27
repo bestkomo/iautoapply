@@ -1,6 +1,6 @@
 import { chromium, Browser, Page } from "playwright";
 import { resolve } from "path";
-import { mkdirSync, existsSync } from "fs";
+import { mkdirSync, existsSync, statSync } from "fs";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -180,17 +180,29 @@ async function tryTypeMultiple(page: Page, selectors: string[], text: string): P
 
 /** Upload a file to a file input */
 async function uploadResume(page: Page, resumePath: string): Promise<boolean> {
+  // Verify file exists before attempting upload
+  if (!existsSync(resumePath)) {
+    console.error(`[Playwright] Resume file does not exist: ${resumePath}`);
+    return false;
+  }
+  console.log(`[Playwright] Resume file verified at: ${resumePath} (${statSync(resumePath).size} bytes)`);
+
   const fileSelectors = [
     'input[type="file"]',
     'input[name*="resume"]',
     'input[name*="Resume"]',
     'input[accept*=".pdf"]',
     'input[accept*="application/pdf"]',
+    'input[accept*=".doc"]',
+    'input[accept*=".txt"]',
     'input[id*="resume"]',
     'input[id*="Resume"]',
     'input[data-field*="resume"]',
+    'input[name*="file"]',
+    'input[id*="file"]',
   ];
 
+  // First try: find visible or hidden file inputs directly
   for (const sel of fileSelectors) {
     try {
       const input = page.locator(sel).first();
@@ -200,10 +212,46 @@ async function uploadResume(page: Page, resumePath: string): Promise<boolean> {
         console.log(`[Playwright] Resume uploaded via selector: ${sel}`);
         return true;
       }
-    } catch {
-      // Try next selector
+    } catch (err) {
+      console.log(`[Playwright] Resume upload failed for ${sel}: ${err instanceof Error ? err.message : err}`);
     }
   }
+
+  // Second try: Greenhouse "Attach" button triggers a hidden file input
+  // Click the Attach button and use fileChooser event
+  try {
+    const attachButton = page.locator('button:has-text("Attach"), a:has-text("Attach"), label:has-text("Attach")').first();
+    if (await attachButton.isVisible({ timeout: 2000 }).catch(() => false)) {
+      console.log("[Playwright] Found Attach button, using fileChooser event");
+      const [fileChooser] = await Promise.all([
+        page.waitForEvent("filechooser", { timeout: 5000 }),
+        attachButton.click(),
+      ]);
+      await fileChooser.setFiles(resumePath);
+      await stepDelay();
+      console.log("[Playwright] Resume uploaded via Attach button fileChooser");
+      return true;
+    }
+  } catch (err) {
+    console.log(`[Playwright] Attach button approach failed: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // Third try: find ANY file input on the page (including hidden ones)
+  try {
+    const allFileInputs = page.locator('input[type="file"]');
+    const count = await allFileInputs.count();
+    console.log(`[Playwright] Found ${count} total file inputs on page`);
+    for (let i = 0; i < count; i++) {
+      try {
+        await allFileInputs.nth(i).setInputFiles(resumePath);
+        await stepDelay();
+        console.log(`[Playwright] Resume uploaded via file input #${i}`);
+        return true;
+      } catch { /* try next */ }
+    }
+  } catch { /* skip */ }
+
+  console.error("[Playwright] Failed to upload resume - no working file input found");
   return false;
 }
 
@@ -496,8 +544,13 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
 
     // --- Upload resume ---
     if (profile.resumePath) {
-      console.log("[Playwright] Uploading resume");
-      await uploadResume(page, profile.resumePath);
+      console.log("[Playwright] Uploading resume from:", profile.resumePath);
+      const uploaded = await uploadResume(page, profile.resumePath);
+      if (!uploaded) {
+        console.error("[Playwright] WARNING: Resume upload failed! Form submission will likely fail.");
+      }
+    } else {
+      console.error("[Playwright] WARNING: No resume path provided! Form submission will likely fail.");
     }
 
     // Scroll down to check for additional required fields
@@ -820,12 +873,20 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
       }
 
       // Check if we're still on the same form (validation errors)
-      const hasErrors = await page.locator('.field-error, .error-message, [class*="error"], .invalid-feedback').first()
+      // Use specific Greenhouse error selectors — avoid overly broad [class*="error"]
+      const errorSelector = '.field-error, .error-message, .invalid-feedback, [data-error], .form-field--error, .field_with_errors, .field--error';
+      const hasErrors = await page.locator(errorSelector).first()
         .isVisible({ timeout: 2000 }).catch(() => false);
-      if (hasErrors) {
+
+      // Also check for the red "Please enter" / "is required" text that Greenhouse shows
+      const pageText = await page.textContent("body").catch(() => "") || "";
+      const hasRequiredErrors = /please enter your|is required\.|please fill|resume\/cv is required/i.test(pageText) &&
+        !CONFIRMATION_KEYWORDS.some(kw => pageText.toLowerCase().includes(kw));
+
+      if (hasErrors || hasRequiredErrors) {
         // Log which fields have errors
         try {
-          const errorElements = page.locator('.field-error, .error-message, [class*="error"]:not(body):not(html), .invalid-feedback');
+          const errorElements = page.locator(errorSelector);
           const errorCount = await errorElements.count();
           const errorTexts: string[] = [];
           for (let i = 0; i < Math.min(errorCount, 10); i++) {
@@ -860,14 +921,33 @@ async function applyGreenhouse(page: Page, profile: ApplicantProfile): Promise<A
       }
 
       // No confirmation and no errors - check if URL changed (redirect to thank you page)
-      const currentUrl = page.url();
-      const urlChanged = currentUrl.includes("thank") || currentUrl.includes("confirm") || currentUrl.includes("success");
+      const currentUrl = page.url().toLowerCase();
+      const urlChanged = currentUrl.includes("thank") ||
+                         currentUrl.includes("confirm") ||
+                         currentUrl.includes("success") ||
+                         currentUrl.includes("applied") ||
+                         currentUrl.includes("complete") ||
+                         currentUrl.includes("submitted");
+
+      // If no confirmation text but also no errors, the form was likely submitted successfully
+      // Many Greenhouse forms just show a brief flash or redirect without clear confirmation text
+      const noFormVisible = !(await page.locator('button[type="submit"], input[type="submit"], #submit_app').first()
+        .isVisible({ timeout: 2000 }).catch(() => false));
+
+      if (urlChanged || noFormVisible) {
+        return {
+          success: true,
+          platform: "greenhouse",
+          message: urlChanged
+            ? "Application submitted via Greenhouse (URL redirect detected)"
+            : "Application submitted via Greenhouse (form no longer visible after submit)",
+        };
+      }
+
       return {
-        success: urlChanged,
+        success: false,
         platform: "greenhouse",
-        message: urlChanged
-          ? "Application submitted via Greenhouse (URL redirect detected)"
-          : "Form submitted but no confirmation detected - application may not have completed",
+        message: "Form submitted but no confirmation detected - application may not have completed",
       };
     }
 
@@ -1182,7 +1262,13 @@ async function fillGreenhouseLocation(page: Page, location: string): Promise<boo
     'input[id*="city"]',
     'input[autocomplete="address-level2"]',
     'input[data-field*="location"]',
+    // Greenhouse-specific: label-based lookup
+    'label:has-text("Location") + div input',
+    'label:has-text("Location") ~ input',
   ];
+
+  // Extract just the city name for autocomplete (e.g. "Houston" from "Houston, TX 77084")
+  const cityOnly = location.split(",")[0]?.trim() || location;
 
   for (const sel of locationSelectors) {
     try {
@@ -1192,35 +1278,97 @@ async function fillGreenhouseLocation(page: Page, location: string): Promise<boo
         await humanDelay();
         await loc.fill("");
         await humanDelay();
-        // Type slowly to trigger autocomplete
-        await loc.pressSequentially(location, { delay: 80 });
+
+        // Type slowly to trigger autocomplete — use just city name for better matches
+        await loc.pressSequentially(cityOnly, { delay: 100 });
+        console.log(`[Playwright] Location: typed "${cityOnly}", waiting for suggestions...`);
+
+        // Wait a bit longer for autocomplete API to respond
         await stepDelay();
+        await humanDelay();
 
         // Check for autocomplete suggestions and click the first one
         const suggestionSelectors = [
-          '.pac-item', // Google Places autocomplete
+          '.pac-item',                              // Google Places autocomplete
+          '.pac-container .pac-item',               // Google Places (nested)
           '[class*="autocomplete"] li',
           '[class*="suggestion"]',
           '[role="option"]',
+          '[role="listbox"] [role="option"]',        // ARIA listbox pattern
           '[class*="dropdown"] li',
           '.location-autocomplete-results li',
+          'ul[id*="location"] li',                   // ID-based dropdown
+          '.pac-container div',                      // Google Places fallback
         ];
+        let selected = false;
         for (const suggSel of suggestionSelectors) {
           try {
             const suggestion = page.locator(suggSel).first();
             if (await suggestion.isVisible({ timeout: 3000 }).catch(() => false)) {
               await suggestion.click();
               await humanDelay();
-              return true;
+              console.log(`[Playwright] Location: selected suggestion via ${suggSel}`);
+              selected = true;
+              break;
             }
           } catch { /* try next */ }
         }
 
-        // No autocomplete suggestions appeared -- the typed text should suffice
+        if (!selected) {
+          // Fallback: use keyboard to select first autocomplete suggestion
+          console.log("[Playwright] Location: no clickable suggestion found, trying keyboard selection");
+          await loc.press("ArrowDown");
+          await humanDelay();
+          await loc.press("Enter");
+          await humanDelay();
+
+          // Check if the field now has a value (autocomplete may have filled it)
+          const fieldValue = await loc.inputValue().catch(() => "");
+          if (fieldValue && fieldValue.length > 0) {
+            console.log(`[Playwright] Location: keyboard selection worked, value: "${fieldValue}"`);
+            return true;
+          }
+
+          // Final fallback: just fill the full location string directly
+          console.log("[Playwright] Location: keyboard selection didn't work, filling directly");
+          await loc.fill(location);
+          await humanDelay();
+          // Try Tab to confirm and move focus away
+          await loc.press("Tab");
+          await humanDelay();
+        }
+
         return true;
       }
     } catch { /* try next */ }
   }
+
+  // Last resort: try to find location field by label text
+  try {
+    const labels = page.locator('label');
+    const labelCount = await labels.count();
+    for (let i = 0; i < labelCount; i++) {
+      const labelText = await labels.nth(i).textContent().catch(() => "");
+      if (labelText && /location|city/i.test(labelText)) {
+        const forAttr = await labels.nth(i).getAttribute("for").catch(() => null);
+        if (forAttr) {
+          const input = page.locator(`#${CSS.escape(forAttr)}`).first();
+          if (await input.isVisible({ timeout: 1000 }).catch(() => false)) {
+            await input.click();
+            await humanDelay();
+            await input.pressSequentially(cityOnly, { delay: 100 });
+            await stepDelay();
+            await input.press("ArrowDown");
+            await humanDelay();
+            await input.press("Enter");
+            await humanDelay();
+            console.log(`[Playwright] Location: filled via label "${labelText}"`);
+            return true;
+          }
+        }
+      }
+    }
+  } catch { /* skip */ }
 
   return false;
 }
