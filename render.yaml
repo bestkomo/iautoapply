@@ -35,3 +35,15 @@ services:
         sync: false
       - key: NODE_ENV
         value: production
+      - key: APPLY_EMAIL_DOMAIN
+        sync: false
+      - key: MAILCOW_API_URL
+        sync: false
+      - key: MAILCOW_API_KEY
+        sync: false
+      - key: APPLY_EMAIL_IMAP_HOST
+        sync: false
+      - key: APPLY_EMAIL_IMAP_PORT
+        sync: false
+      - key: APPLY_EMAIL_ENCRYPTION_KEY
+        sync: false

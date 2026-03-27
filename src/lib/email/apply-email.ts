@@ -68,10 +68,7 @@ export function generateMailboxPassword(): string {
 const MAILCOW_API_URL = process.env.MAILCOW_API_URL || "";
 const MAILCOW_API_KEY = process.env.MAILCOW_API_KEY || "";
 
-// Allow self-signed certs for Mailcow API (before Let's Encrypt is set up)
-if (typeof process !== "undefined") {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED || "0";
-}
+// Note: Mailcow server uses Let's Encrypt SSL (mail.iautoaply.com)
 
 async function createMailboxOnServer(localPart: string, password: string, userName?: string | null): Promise<boolean> {
   if (!MAILCOW_API_URL || !MAILCOW_API_KEY) {
