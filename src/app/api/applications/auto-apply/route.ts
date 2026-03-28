@@ -244,28 +244,14 @@ export async function POST() {
   });
   console.log(`[AutoApply] Title keywords filter: [${uniqueKeywords.join(", ")}], found ${jobs.length} jobs`);
 
-  // Known ATS domains where Playwright can actually fill out application forms
+  // Only ATS platforms with dedicated Playwright handlers — these actually work reliably
   const ATS_DOMAINS = [
+    // Greenhouse (dedicated handler — most reliable)
     "greenhouse.io", "boards.greenhouse.io", "job-boards.greenhouse.io",
+    // Lever (dedicated handler)
     "lever.co", "jobs.lever.co",
+    // Workday (dedicated handler — healthcare companies use this heavily)
     "myworkdayjobs.com", "workday.com", ".wd1.", ".wd3.", ".wd5.",
-    "smartrecruiters.com", "jobs.smartrecruiters.com",
-    "icims.com",
-    "paylocity.com", "recruiting.paylocity.com", "jobvite.com", "ultipro.com",
-    "successfactors.com", "taleo.net", "breezy.hr",
-    "ashbyhq.com", "bamboohr.com", "jazz.co", "recruiterbox.com",
-    "apply.workable.com",
-    // Healthcare company career sites (direct employer sites with application forms)
-    "geisinger.org/job", "jobs.geisinger.org",
-    "rwjbarnabashealthcareers.org",
-    "jobs.ssmhealth.com",
-    "jobs.bswhealth.com",
-    "ayahealthcare.com",
-    "jobs.tenethealth.com",
-    "careers.advocatehealth.com",
-    "bannerhealth.com/careers",
-    "careers.commonspirit.org",
-    "providencecareers.org",
   ];
 
   // Blocked aggregator domains — these redirect/preview and can't be auto-applied to
