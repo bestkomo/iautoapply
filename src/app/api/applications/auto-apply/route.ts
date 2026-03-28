@@ -327,7 +327,7 @@ export async function POST() {
     })
     .filter((item) => item.score >= minScore)
     .sort((a, b) => b.score - a.score)
-    .slice(0, Math.min(remaining, 3)); // Max 3 at a time, run sequentially to prevent OOM on 512MB
+    .slice(0, Math.min(remaining, 1)); // Max 1 at a time to prevent OOM on 512MB Render starter
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
 
   // Fetch user profile for Playwright automation
@@ -565,7 +565,7 @@ async function runSequentialAutomation(
     // Delay between automations to let memory free up + force GC
     if (i < tasks.length - 1) {
       try { if (global.gc) global.gc(); } catch { /* GC not exposed */ }
-      await new Promise((r) => setTimeout(r, 3000));
+      await new Promise((r) => setTimeout(r, 5000)); // 5s delay for memory cleanup on 512MB
     }
   }
 
