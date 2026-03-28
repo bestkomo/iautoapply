@@ -251,10 +251,21 @@ export async function POST() {
     "myworkdayjobs.com", "workday.com", ".wd1.", ".wd3.", ".wd5.",
     "smartrecruiters.com", "jobs.smartrecruiters.com",
     "icims.com",
-    "paylocity.com", "jobvite.com", "ultipro.com",
+    "paylocity.com", "recruiting.paylocity.com", "jobvite.com", "ultipro.com",
     "successfactors.com", "taleo.net", "breezy.hr",
     "ashbyhq.com", "bamboohr.com", "jazz.co", "recruiterbox.com",
     "apply.workable.com",
+    // Healthcare company career sites (direct employer sites with application forms)
+    "geisinger.org/job", "jobs.geisinger.org",
+    "rwjbarnabashealthcareers.org",
+    "jobs.ssmhealth.com",
+    "jobs.bswhealth.com",
+    "ayahealthcare.com",
+    "jobs.tenethealth.com",
+    "careers.advocatehealth.com",
+    "bannerhealth.com/careers",
+    "careers.commonspirit.org",
+    "providencecareers.org",
   ];
 
   // Blocked aggregator domains — these redirect/preview and can't be auto-applied to
@@ -263,7 +274,7 @@ export async function POST() {
     "monster.com", "careerbuilder.com",
     // Job preview/aggregator sites that don't have application forms
     "tealhq.com", "jobrapido.com", "jobleads.com", "learn4good.com",
-    "jooble.org", "talent.com", "adzuna.com", "simplyhired.com",
+    "jooble.org", "talent.com", "simplyhired.com",
     "snagajob.com", "lensa.com", "jobgether.com", "wellfound.com",
     "dice.com", "flexjobs.com", "remote.co", "weworkremotely.com",
     "himalayas.app", "remotive.com", "remoteok.com", "arbeitnow.com",

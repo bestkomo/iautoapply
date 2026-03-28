@@ -17,6 +17,7 @@ import { JSearchScraper } from "./jsearch";
 import { ActiveJobsScraper } from "./activejobs";
 import { RemoteJobsAPIScraper } from "./remote-jobs-api";
 import { WorkdayScraper } from "./workday";
+import { AdzunaScraper } from "./adzuna";
 
 const JOB_TYPE_MAP: Record<string, JobType> = {
   FULL_TIME: "FULL_TIME",
@@ -44,6 +45,7 @@ const SOURCE_MAP: Record<string, JobSource> = {
   ACTIVEJOBS: "ACTIVEJOBS",
   REMOTEJOBS_API: "REMOTEJOBS_API",
   WORKDAY: "WORKDAY",
+  ADZUNA: "ADZUNA",
   MANUAL: "MANUAL",
 };
 
@@ -62,6 +64,7 @@ export class ScraperManager {
     this.scrapers = [
       new WorkdayScraper(), // Workday FIRST - direct healthcare company career sites
       new ActiveJobsScraper(), // Active Jobs DB - real ATS jobs from Workday, Greenhouse, Lever, Paylocity, SmartRecruiters
+      new AdzunaScraper(), // Adzuna - free API, aggregates healthcare jobs from many sources
       new JSearchScraper(), // JSearch - aggregates Indeed, LinkedIn, Glassdoor, ZipRecruiter, Monster
       new RemoteJobsAPIScraper(), // Remote Jobs API - real ATS jobs with direct apply URLs
       new GreenhouseScraper(),

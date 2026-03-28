@@ -19,15 +19,23 @@ interface LeverJob {
   createdAt: number;
 }
 
-// Top North American companies using Lever job boards
+// Healthcare + general companies using Lever job boards
 const LEVER_COMPANIES = [
+  // Healthcare companies
+  "pmdsoft",                                // pMD - medical insurance verification
+  "ClinicalHealthNetworkForTransformation", // CHN - patient access representatives
+  "heyjane",                                // Hey Jane - billing specialist, Medicaid
+  "includedhealth",                         // Included Health - healthcare services
+  "healthcare",                             // HealthCare.com - health insurance
+  "all.health",                             // all.health - health platform
+  "nuvancehealth",                          // Nuvance Health - hospital system
+  "cityblock",                              // Cityblock Health - community health
+  "devoted",                                // Devoted Health - Medicare Advantage
+  "hims",                                   // Hims & Hers Health
+  // General companies (keep for broader coverage)
   "netflix",
   "shopify",
-  "twitch",
-  "reddit",
   "coinbase",
-  "databricks",
-  "verkada",
 ];
 
 const COMMITMENT_MAP: Record<string, string> = {
@@ -123,23 +131,27 @@ export class LeverScraper extends BaseScraper {
 
     let jobs = data.filter((job) => job.text && job.hostedUrl);
 
-    // Filter by query if provided
+    // Filter by query keywords (split query into words, match if ANY keyword found)
     if (query) {
-      const lowerQuery = query.toLowerCase();
-      jobs = jobs.filter((job) => {
-        const searchText = [
-          job.text,
-          job.categories?.team,
-          job.categories?.location,
-          job.categories?.department,
-          job.descriptionPlain,
-          job.additionalPlain,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return searchText.includes(lowerQuery);
-      });
+      const keywords = query.toLowerCase().split(/\s+/).filter(w =>
+        w.length > 2 && !["the", "and", "for", "with", "job", "role", "a", "an"].includes(w)
+      );
+      if (keywords.length > 0) {
+        jobs = jobs.filter((job) => {
+          const searchText = [
+            job.text,
+            job.categories?.team,
+            job.categories?.location,
+            job.categories?.department,
+            job.descriptionPlain,
+            job.additionalPlain,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return keywords.some((kw) => searchText.includes(kw));
+        });
+      }
     }
 
     // Cap per company
@@ -195,13 +207,19 @@ export class LeverScraper extends BaseScraper {
 
   private formatCompanyName(slug: string): string {
     const nameMap: Record<string, string> = {
+      pmdsoft: "pMD",
+      ClinicalHealthNetworkForTransformation: "Clinical Health Network",
+      heyjane: "Hey Jane",
+      includedhealth: "Included Health",
+      healthcare: "HealthCare.com",
+      "all.health": "all.health",
+      nuvancehealth: "Nuvance Health",
+      cityblock: "Cityblock Health",
+      devoted: "Devoted Health",
+      hims: "Hims & Hers Health",
       netflix: "Netflix",
       shopify: "Shopify",
-      twitch: "Twitch",
-      reddit: "Reddit",
       coinbase: "Coinbase",
-      databricks: "Databricks",
-      verkada: "Verkada",
     };
     return (
       nameMap[slug] ||

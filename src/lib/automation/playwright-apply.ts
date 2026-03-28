@@ -1661,8 +1661,11 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
       // Check if we've reached the Submit button
       const submitBtn = page.locator(
         'button[data-automation-id="bottom-navigation-next-button"]:has-text("Submit"), ' +
+        'div[data-automation-id="bottom-navigation-next-button"]:has-text("Submit"), ' +
         'button:has-text("Submit Application"), ' +
-        'button:has-text("Submit")'
+        'button:has-text("Submit"), ' +
+        'button[aria-label="Submit"], ' +
+        '[data-automation-id="pageFooterNextButton"]:has-text("Submit")'
       ).first();
       if (await submitBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
         // Make sure it actually says "Submit" and not "Next"
@@ -1694,7 +1697,21 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
         'button:has-text("Next")',
         'button:has-text("Continue")',
         'button[data-automation-id="bottom-navigation-next-button"]',
-        'button.css-1476i2r', // Common Workday button class
+        'div[data-automation-id="bottom-navigation-next-button"]',
+        'a[data-automation-id="bottom-navigation-next-button"]',
+        '[data-automation-id="navigationBar"] button',
+        'button[aria-label="Next"]',
+        'button[aria-label="Save and Continue"]',
+        'button[aria-label="Continue"]',
+        // Workday footer navigation buttons (various class patterns)
+        'button.css-1476i2r',
+        'button.css-1liuqri',
+        '[data-automation-id="pageFooterNextButton"]',
+        '[data-automation-id="bottom-navigation"] button',
+        // Generic footer/bottom navigation
+        'footer button:has-text("Next")',
+        'footer button:has-text("Continue")',
+        'div[role="navigation"] button:has-text("Next")',
       ];
 
       // Scroll down first to ensure button is visible
@@ -1705,7 +1722,7 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
       for (const sel of nextSelectors) {
         try {
           const btn = page.locator(sel).first();
-          if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
             const btnText = await btn.textContent().catch(() => "") || "";
             // Skip if this is actually a "Submit" button (handled above)
             if (btnText.toLowerCase().includes("submit")) continue;
@@ -1722,8 +1739,39 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
         } catch { /* continue */ }
       }
 
+      // Last resort: try clicking any visible button in the bottom area of the page
+      if (!clickedNext) {
+        try {
+          console.log("[Playwright] Workday: Trying last-resort button search...");
+          const allButtons = page.locator('button');
+          const count = await allButtons.count();
+          for (let b = count - 1; b >= Math.max(0, count - 5); b--) {
+            const btn = allButtons.nth(b);
+            const btnText = await btn.textContent().catch(() => "") || "";
+            const lower = btnText.toLowerCase().trim();
+            if (
+              (lower.includes("next") || lower.includes("continue") || lower.includes("save")) &&
+              !lower.includes("submit") &&
+              !lower.includes("back") &&
+              !lower.includes("cancel")
+            ) {
+              if (await btn.isVisible().catch(() => false)) {
+                await btn.click();
+                clickedNext = true;
+                stepsCompleted++;
+                console.log(`[Playwright] Workday: Last-resort clicked "${btnText.trim()}" (button ${b}/${count})`);
+                await page.waitForTimeout(5000);
+                await takeScreenshot(page, `workday-after-step${step + 1}-lastresort`);
+                break;
+              }
+            }
+          }
+        } catch { /* continue */ }
+      }
+
       if (!clickedNext) {
         console.log("[Playwright] Workday: No Next/Submit button found on step " + (step + 1) + ", ending step loop");
+        await takeScreenshot(page, `workday-stuck-step${step + 1}`);
         break;
       }
     }

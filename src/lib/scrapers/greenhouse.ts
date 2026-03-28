@@ -17,18 +17,29 @@ interface GreenhouseResponse {
   jobs: GreenhouseJob[];
 }
 
-// Top North American companies using Greenhouse job boards
+// Healthcare companies using Greenhouse job boards (verified March 2026)
 const GREENHOUSE_COMPANIES = [
+  // Healthcare - insurance verification, patient access, benefits
+  "bouldercare",              // Boulder Care - insurance verification roles
+  "recorainc",                // Recora Inc - insurance verification specialist
+  "dreemhealth",              // Dreem Health - verification of benefits
+  "calahealth",               // Cala Health - insurance verification & appeals
+  "blinkhealth",              // Blink Health - insurance verification specialist
+  "vitalcaringgroup",         // VitalCaring Group - insurance verification & auth
+  "modernizingmedicineinc",   // Modernizing Medicine - patient claims
+  "caredxinc",                // CareDx - reimbursement specialist
+  "charliehealth",            // Charlie Health - mental health, patient access
+  "shieldshealthsolutions",   // Shields Health Solutions - health systems
+  "cloverhealth",             // Clover Health - Medicare Advantage
+  "cleerlyhealth",            // Cleerly - heart disease diagnostics
+  "acuitymd",                 // AcuityMD - medical technology
+  "honehealth",               // Hone Health - online medical clinic
+  "khealthcareers",           // K Health - partnered with Mayo Clinic, Cedars-Sinai
+  "smartertechnologies",      // Smarter Technologies - patient access specialist
+  // General tech (keep a few for broader coverage)
   "stripe",
-  "cloudflare",
   "figma",
-  "notion",
-  "datadog",
   "gitlab",
-  "hashicorp",
-  "twilio",
-  "cockroachlabs",
-  "snyk",
 ];
 
 export class GreenhouseScraper extends BaseScraper {
@@ -113,21 +124,25 @@ export class GreenhouseScraper extends BaseScraper {
 
     let jobs = data.jobs.filter((job) => job.title && job.absolute_url);
 
-    // Filter by query if provided
+    // Filter by query keywords (split query into words, match if ANY keyword found)
     if (query) {
-      const lowerQuery = query.toLowerCase();
-      jobs = jobs.filter((job) => {
-        const searchText = [
-          job.title,
-          job.location?.name,
-          job.content,
-          ...(job.departments?.map((d) => d.name) || []),
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return searchText.includes(lowerQuery);
-      });
+      const keywords = query.toLowerCase().split(/\s+/).filter(w =>
+        w.length > 2 && !["the", "and", "for", "with", "job", "role", "a", "an"].includes(w)
+      );
+      if (keywords.length > 0) {
+        jobs = jobs.filter((job) => {
+          const searchText = [
+            job.title,
+            job.location?.name,
+            job.content,
+            ...(job.departments?.map((d) => d.name) || []),
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return keywords.some((kw) => searchText.includes(kw));
+        });
+      }
     }
 
     // Cap per company to avoid overwhelming results
@@ -164,16 +179,25 @@ export class GreenhouseScraper extends BaseScraper {
 
   private formatCompanyName(slug: string): string {
     const nameMap: Record<string, string> = {
+      bouldercare: "Boulder Care",
+      recorainc: "Recora Inc",
+      dreemhealth: "Dreem Health",
+      calahealth: "Cala Health",
+      blinkhealth: "Blink Health",
+      vitalcaringgroup: "VitalCaring Group",
+      modernizingmedicineinc: "Modernizing Medicine",
+      caredxinc: "CareDx",
+      charliehealth: "Charlie Health",
+      shieldshealthsolutions: "Shields Health Solutions",
+      cloverhealth: "Clover Health",
+      cleerlyhealth: "Cleerly",
+      acuitymd: "AcuityMD",
+      honehealth: "Hone Health",
+      khealthcareers: "K Health",
+      smartertechnologies: "Smarter Technologies",
       stripe: "Stripe",
-      cloudflare: "Cloudflare",
       figma: "Figma",
-      notion: "Notion",
-      datadog: "Datadog",
       gitlab: "GitLab",
-      hashicorp: "HashiCorp",
-      twilio: "Twilio",
-      cockroachlabs: "Cockroach Labs",
-      snyk: "Snyk",
     };
     return (
       nameMap[slug] ||
