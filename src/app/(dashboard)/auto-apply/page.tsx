@@ -353,7 +353,13 @@ export default function AutoApplyPage() {
         body: JSON.stringify({ plan }),
       });
       const data = await res.json();
-      if (data.url) window.location.href = data.url;
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert("Checkout error: " + (data.error || "Unknown error. Please try again."));
+      }
+    } catch (err) {
+      alert("Failed to connect to payment server. Please try again.");
     } finally {
       setUpgrading(false);
     }

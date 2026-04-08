@@ -23,6 +23,18 @@ export async function POST(req: Request) {
 
     const planConfig = PLANS[plan] as typeof PLANS.PRO;
 
+    if (!planConfig.priceId) {
+      console.error("[Stripe Checkout] Missing priceId for plan:", plan, "ENV:", {
+        pro: process.env.STRIPE_PRO_PRICE_ID ? "set" : "MISSING",
+        enterprise: process.env.STRIPE_ENTERPRISE_PRICE_ID ? "set" : "MISSING",
+        secretKey: process.env.STRIPE_SECRET_KEY ? "set" : "MISSING",
+      });
+      return NextResponse.json(
+        { error: "Payment configuration error. Please contact support." },
+        { status: 500 }
+      );
+    }
+
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],

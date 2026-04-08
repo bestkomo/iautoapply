@@ -203,10 +203,10 @@ export default function SettingsPage() {
       if (data.url) {
         window.location.href = data.url;
       } else {
-        console.error("No checkout URL returned");
+        alert("Checkout error: " + (data.error || "Unknown error. Please try again."));
       }
     } catch (error) {
-      console.error("Failed to create checkout session:", error);
+      alert("Failed to connect to payment server. Please try again.");
     } finally {
       setUpgrading(null);
     }
