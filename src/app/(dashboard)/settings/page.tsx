@@ -61,9 +61,9 @@ const PLAN_DETAILS: Record<
     color: "bg-muted text-muted-foreground",
     price: 0,
     features: [
-      "5 auto-applies/day",
-      "Job search",
+      "Job search & browsing",
       "Resume upload",
+      "Basic ATS scoring",
     ],
   },
   PRO: {

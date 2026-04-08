@@ -127,10 +127,24 @@ export async function POST() {
 
   // Check subscription limits
   const { allowed, remaining: subRemaining, plan } = await canAutoApply(session.user.id);
+
+  // Free users cannot auto-apply at all
+  if (plan === "FREE") {
+    return NextResponse.json(
+      {
+        error: "Auto-apply is a paid feature. Upgrade to Pro ($29/mo) to start auto-applying to jobs.",
+        remaining: 0,
+        plan,
+        upgradeRequired: true,
+      },
+      { status: 403 }
+    );
+  }
+
   if (!allowed) {
     return NextResponse.json(
       {
-        error: "Daily limit reached. Upgrade to Pro for more.",
+        error: "Daily limit reached. Upgrade to Enterprise for more.",
         remaining: 0,
         plan,
       },

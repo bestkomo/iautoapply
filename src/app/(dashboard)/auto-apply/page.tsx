@@ -257,6 +257,8 @@ export default function AutoApplyPage() {
   const [appliedLoading, setAppliedLoading] = useState(false);
   const [applyEmail, setApplyEmail] = useState<string | null>(null);
   const [creatingEmail, setCreatingEmail] = useState(false);
+  const [userPlan, setUserPlan] = useState<string | null>(null);
+  const [upgrading, setUpgrading] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -328,10 +330,40 @@ export default function AutoApplyPage() {
     }
   }
 
+  const fetchPlan = useCallback(async () => {
+    try {
+      const res = await fetch("/api/profile");
+      if (res.ok) {
+        const data = await res.json();
+        setUserPlan(data.subscription?.plan || "FREE");
+      } else {
+        setUserPlan("FREE");
+      }
+    } catch {
+      setUserPlan("FREE");
+    }
+  }, []);
+
+  async function handleUpgrade(plan: "PRO" | "ENTERPRISE") {
+    setUpgrading(true);
+    try {
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    } finally {
+      setUpgrading(false);
+    }
+  }
+
   useEffect(() => {
     fetchStatus();
     fetchApplyEmail();
-  }, [fetchStatus, fetchApplyEmail]);
+    fetchPlan();
+  }, [fetchStatus, fetchApplyEmail, fetchPlan]);
 
   useEffect(() => {
     if (activeTab === "inbox") fetchInbox();
@@ -340,12 +372,18 @@ export default function AutoApplyPage() {
 
   async function handleToggle() {
     if (!status) return;
+    if (userPlan === "FREE") return; // Block free users
     setToggling(true);
     try {
       if (status.enabled) {
         await fetch("/api/applications/auto-apply", { method: "DELETE" });
       } else {
         const res = await fetch("/api/applications/auto-apply", { method: "POST" });
+        if (res.status === 403) {
+          // User needs to upgrade
+          await fetchPlan();
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           if (data.applied > 0) {
@@ -395,6 +433,37 @@ export default function AutoApplyPage() {
           </Button>
         </Link>
       </div>
+
+      {/* -------- Upgrade Wall for Free Users -------- */}
+      {userPlan === "FREE" && (
+        <Card className="border-2 border-primary/50 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30">
+          <CardContent className="p-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Zap className="h-6 w-6 text-primary" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold">Upgrade to Start Auto-Applying</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Auto-apply is a premium feature. Upgrade to Pro to automatically apply to 50 jobs per day.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => handleUpgrade("PRO")}
+                  disabled={upgrading}
+                  className="gap-2"
+                >
+                  {upgrading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  Upgrade to Pro — $29/mo
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* -------- Tabs -------- */}
       <div className="flex items-center gap-1 border-b">
