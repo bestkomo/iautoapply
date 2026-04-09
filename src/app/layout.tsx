@@ -6,6 +6,9 @@ import { Providers } from "@/components/providers";
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
+  verification: {
+    google: "HxWeD6UZLZd8sK9H9odLXxCdYJlN5xAG8PZjMEuxrl4",
+  },
   title: "iAutoApply - Auto Apply to Jobs with AI | 50 Applications Per Day",
   description:
     "Stop applying to jobs manually. iAutoApply uses AI to automatically apply to 50+ jobs per day on Greenhouse, Lever & Workday while you sleep. Start free.",
