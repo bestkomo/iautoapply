@@ -199,15 +199,15 @@ export default function LandingPage() {
             AI-Powered Job Search Platform
           </div>
           <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold tracking-tight max-w-4xl mx-auto leading-[1.1]">
-            Land Your Dream Job{" "}
+            Auto Apply to Jobs{" "}
             <span className="bg-gradient-to-r from-blue-500 via-purple-500 to-blue-600 bg-clip-text text-transparent bg-[length:200%_auto] animate-gradient-shift">
-              10x Faster
+              While You Sleep
             </span>
           </h1>
           <p className="mt-6 text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            AI-powered resume building, automated job applications, interview
-            coaching, and job aggregation from every major platform -- all in one
-            place.
+            Stop applying to jobs manually. Our AI automatically applies to 50+
+            jobs per day on Greenhouse, Lever &amp; Workday while you focus on
+            what matters.
           </p>
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link href="/register">
