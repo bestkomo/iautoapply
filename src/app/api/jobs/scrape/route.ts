@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/auth-options";
 import { getScraperManager } from "@/lib/scrapers/scraper-manager";
+import { prisma } from "@/lib/db/prisma";
+import { fromJsonArray } from "@/lib/db/json-array";
 
 export async function POST(req: Request) {
   try {
@@ -27,9 +29,29 @@ export async function POST(req: Request) {
       // No JSON body, use query params
     }
 
-    // Default query if none provided
+    // If no query provided, use the user's job preferences
     if (!query) {
-      query = "software engineer";
+      const prefs = await prisma.jobPreference.findFirst({
+        where: { userId: session.user.id },
+      });
+
+      if (prefs) {
+        const titles = fromJsonArray(prefs.desiredTitles as string);
+        const locations = fromJsonArray(prefs.desiredLocations as string);
+
+        if (titles.length > 0) {
+          // Use the first 2 desired titles as search queries
+          query = titles.slice(0, 2).join(" OR ");
+        }
+        if (!location && locations.length > 0) {
+          location = locations[0];
+        }
+      }
+
+      // Final fallback
+      if (!query) {
+        query = "customer service";
+      }
     }
 
     console.log(
