@@ -6,6 +6,25 @@ import { mkdirSync, existsSync, statSync } from "fs";
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
+export interface ApplicationQA {
+  authorizedToWork: boolean;
+  requireSponsorship: boolean;
+  isOver18: boolean;
+  hasDriversLicense: boolean;
+  hasFelonyConviction: boolean;
+  willingToRelocate: boolean;
+  willingToTravel: boolean;
+  desiredSalary?: number;
+  availableStartDate?: string;
+  howDidYouHear: string;
+  yearsOfExperience: number;
+  highestEducation: string;
+  gender: string;
+  race: string;
+  veteranStatus: string;
+  disabilityStatus: string;
+}
+
 export interface ApplicantProfile {
   name: string;
   firstName: string;
@@ -18,6 +37,7 @@ export interface ApplicantProfile {
   resumePath?: string; // Absolute path to resume PDF file on disk
   applyEmail?: string; // Generated @apply.iautoaply.com email for ATS accounts
   applyEmailPassword?: string; // Password for the apply email (for Workday account creation)
+  qa?: ApplicationQA;
 }
 
 export interface ApplyResult {
@@ -1039,31 +1059,33 @@ async function selectGreenhouseCountry(page: Page, country: string): Promise<boo
  */
 async function fillGreenhouseCommonFields(page: Page, profile: ApplicantProfile) {
   try {
-    // Common question patterns and their answers
+    const qa = profile.qa;
+
+    // Common question patterns and their answers — uses QA data when available
     const commonAnswers: { patterns: string[]; answer: string }[] = [
       {
         patterns: ["how did you hear", "how did you find", "where did you hear", "referral source", "source of application"],
-        answer: "Online Job Board",
+        answer: qa?.howDidYouHear || "Online Job Board",
       },
       {
         patterns: ["authorized to work", "legally authorized", "work authorization", "eligible to work", "right to work"],
-        answer: "Yes",
+        answer: qa ? (qa.authorizedToWork ? "Yes" : "No") : "Yes",
       },
       {
         patterns: ["require sponsorship", "visa sponsorship", "immigration sponsorship", "need sponsorship"],
-        answer: "No",
+        answer: qa ? (qa.requireSponsorship ? "Yes" : "No") : "No",
       },
       {
         patterns: ["salary expectation", "desired salary", "expected salary", "compensation expectation", "desired compensation", "compensation range", "pay expectation"],
-        answer: "$35,000 - $40,000",
+        answer: qa?.desiredSalary ? `$${qa.desiredSalary.toLocaleString()}` : "$35,000 - $40,000",
       },
       {
         patterns: ["years of experience", "how many years"],
-        answer: "5",
+        answer: qa ? String(qa.yearsOfExperience) : "5",
       },
       {
         patterns: ["start date", "available to start", "earliest start", "when can you start"],
-        answer: "Immediately",
+        answer: qa?.availableStartDate || "Immediately",
       },
       {
         patterns: ["cover letter", "why are you interested", "why do you want"],
@@ -1083,19 +1105,19 @@ async function fillGreenhouseCommonFields(page: Page, profile: ApplicantProfile)
       },
       {
         patterns: ["gender", "pronouns", "self-identification of gender"],
-        answer: "Prefer not to say",
+        answer: qa?.gender && qa.gender !== "Decline to answer" ? qa.gender : "Prefer not to say",
       },
       {
         patterns: ["race", "ethnicity", "ethnic"],
-        answer: "Prefer not to say",
+        answer: qa?.race && qa.race !== "Decline to answer" ? qa.race : "Prefer not to say",
       },
       {
         patterns: ["veteran", "military"],
-        answer: "I am not a protected veteran",
+        answer: qa?.veteranStatus === "Veteran" ? "I am a protected veteran" : "I am not a protected veteran",
       },
       {
         patterns: ["disability", "disabled"],
-        answer: "I do not wish to answer",
+        answer: qa?.disabilityStatus === "Yes" ? "Yes" : qa?.disabilityStatus === "No" ? "No" : "I do not wish to answer",
       },
       {
         patterns: ["preferred first name", "preferred name", "nickname", "goes by"],
@@ -1634,19 +1656,19 @@ async function applyWorkday(page: Page, profile: ApplicantProfile): Promise<Appl
       // --- STEP: Application Questions ---
       if (pageTextLower.includes("application questions") || pageTextLower.includes("additional questions") || pageTextLower.includes("screening questions")) {
         console.log("[Playwright] Workday: DETECTED 'Application Questions' step - filling answers");
-        await fillWorkdayApplicationQuestions(page);
+        await fillWorkdayApplicationQuestions(page, profile);
       }
 
       // --- STEP: Voluntary Disclosures ---
       if (pageTextLower.includes("voluntary disclosures") || pageTextLower.includes("eeo") || pageTextLower.includes("equal employment")) {
         console.log("[Playwright] Workday: DETECTED 'Voluntary Disclosures' step - selecting decline options");
-        await fillWorkdayVoluntaryDisclosures(page);
+        await fillWorkdayVoluntaryDisclosures(page, profile);
       }
 
       // --- STEP: Self Identify (disability/veteran) ---
       if (pageTextLower.includes("self identify") || pageTextLower.includes("disability") || pageTextLower.includes("veteran status")) {
         console.log("[Playwright] Workday: DETECTED 'Self Identify' step - selecting decline options");
-        await fillWorkdaySelfIdentify(page);
+        await fillWorkdaySelfIdentify(page, profile);
       }
 
       // --- STEP: Review ---
@@ -2706,20 +2728,44 @@ async function fillWorkdayMyExperience(page: Page, profile: ApplicantProfile) {
 /**
  * Fill the "Application Questions" step with reasonable defaults.
  */
-async function fillWorkdayApplicationQuestions(page: Page) {
-  // Handle radio buttons: try to select "Yes" for positive questions, "No" for disqualifying ones
+async function fillWorkdayApplicationQuestions(page: Page, profile: ApplicantProfile) {
+  const qa = profile.qa;
+
+  // Handle radio buttons using QA data for context-aware answers
   try {
     const radioGroups = page.locator('[data-automation-id*="radio"], fieldset, [role="radiogroup"]');
     const groupCount = await radioGroups.count();
     for (let i = 0; i < groupCount; i++) {
       const group = radioGroups.nth(i);
-      // Try to click "Yes" first, fallback to first option
-      const yesOption = group.locator('label:has-text("Yes"), input[value="Yes"], input[value="yes"]').first();
-      if (await yesOption.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await yesOption.click().catch(() => {});
+      const groupText = (await group.textContent().catch(() => "")) || "";
+      const groupLower = groupText.toLowerCase();
+
+      // Determine the correct answer based on question context and QA data
+      let desiredAnswer = "Yes"; // default
+      if (qa) {
+        if (groupLower.includes("authorized") || groupLower.includes("eligible to work") || groupLower.includes("right to work")) {
+          desiredAnswer = qa.authorizedToWork ? "Yes" : "No";
+        } else if (groupLower.includes("sponsorship") || groupLower.includes("visa") || groupLower.includes("immigration")) {
+          desiredAnswer = qa.requireSponsorship ? "Yes" : "No";
+        } else if (groupLower.includes("18 years") || groupLower.includes("over 18") || groupLower.includes("at least 18")) {
+          desiredAnswer = qa.isOver18 ? "Yes" : "No";
+        } else if (groupLower.includes("driver") || groupLower.includes("license")) {
+          desiredAnswer = qa.hasDriversLicense ? "Yes" : "No";
+        } else if (groupLower.includes("felony") || groupLower.includes("convicted") || groupLower.includes("criminal")) {
+          desiredAnswer = qa.hasFelonyConviction ? "Yes" : "No";
+        } else if (groupLower.includes("relocate") || groupLower.includes("relocation")) {
+          desiredAnswer = qa.willingToRelocate ? "Yes" : "No";
+        } else if (groupLower.includes("travel")) {
+          desiredAnswer = qa.willingToTravel ? "Yes" : "No";
+        }
+      }
+
+      const targetOption = group.locator(`label:has-text("${desiredAnswer}"), input[value="${desiredAnswer}"], input[value="${desiredAnswer.toLowerCase()}"]`).first();
+      if (await targetOption.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await targetOption.click().catch(() => {});
         await humanDelay();
       } else {
-        // Click first radio button in the group
+        // Fallback: click first radio button in the group
         const firstRadio = group.locator('input[type="radio"]').first();
         if (await firstRadio.isVisible({ timeout: 1000 }).catch(() => false)) {
           await firstRadio.click().catch(() => {});
@@ -2802,7 +2848,7 @@ async function fillWorkdayApplicationQuestions(page: Page) {
     }
   } catch { /* non-critical */ }
 
-  // Handle number inputs (e.g., years of experience): fill with "1"
+  // Handle number inputs (e.g., years of experience): fill with QA data or fallback
   try {
     const numInputs = page.locator('input[type="number"][required], input[type="number"][aria-required="true"]');
     const numCount = await numInputs.count();
@@ -2811,7 +2857,22 @@ async function fillWorkdayApplicationQuestions(page: Page) {
         const input = numInputs.nth(i);
         const currentVal = await input.inputValue().catch(() => "");
         if (!currentVal) {
-          await input.fill("1");
+          const fieldInfo = (
+            (await input.getAttribute("data-automation-id").catch(() => "") || "") +
+            (await input.getAttribute("aria-label").catch(() => "") || "") +
+            (await input.getAttribute("name").catch(() => "") || "") +
+            (await input.getAttribute("placeholder").catch(() => "") || "")
+          ).toLowerCase();
+
+          let fillValue = "1";
+          if (qa) {
+            if (fieldInfo.includes("experience") || fieldInfo.includes("years")) {
+              fillValue = String(qa.yearsOfExperience || 1);
+            } else if (fieldInfo.includes("salary") || fieldInfo.includes("compensation") || fieldInfo.includes("pay")) {
+              fillValue = String(qa.desiredSalary || 50000);
+            }
+          }
+          await input.fill(fillValue);
           await humanDelay();
         }
       } catch { /* skip */ }
@@ -2825,7 +2886,41 @@ async function fillWorkdayApplicationQuestions(page: Page) {
  * Fill the "Voluntary Disclosures" step (EEO info).
  * Select "I do not wish to answer" for all demographic questions.
  */
-async function fillWorkdayVoluntaryDisclosures(page: Page) {
+async function fillWorkdayVoluntaryDisclosures(page: Page, profile: ApplicantProfile) {
+  const qa = profile.qa;
+
+  // If user provided specific EEO answers, try to select them first
+  if (qa && qa.gender !== "Decline to answer") {
+    try {
+      const genderOption = page.locator(`label:has-text("${qa.gender}"), input[value*="${qa.gender}"]`).first();
+      if (await genderOption.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await genderOption.click().catch(() => {});
+        await humanDelay();
+      }
+    } catch { /* non-critical */ }
+  }
+
+  if (qa && qa.race !== "Decline to answer") {
+    try {
+      const raceOption = page.locator(`label:has-text("${qa.race}"), input[value*="${qa.race}"]`).first();
+      if (await raceOption.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await raceOption.click().catch(() => {});
+        await humanDelay();
+      }
+    } catch { /* non-critical */ }
+  }
+
+  if (qa && qa.veteranStatus !== "Decline to answer") {
+    try {
+      const vetLabel = qa.veteranStatus === "Veteran" ? "I am a protected veteran" : "I am not a protected veteran";
+      const vetOption = page.locator(`label:has-text("${vetLabel}"), label:has-text("${qa.veteranStatus}")`).first();
+      if (await vetOption.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await vetOption.click().catch(() => {});
+        await humanDelay();
+      }
+    } catch { /* non-critical */ }
+  }
+
   // Look for "I do not wish to answer" / "I don't wish to answer" / "Decline to answer" options
   const declineLabels = [
     "I do not wish to answer",
@@ -2914,8 +3009,29 @@ async function fillWorkdayVoluntaryDisclosures(page: Page) {
  * Fill the "Self Identify" step (disability/veteran status).
  * Select "I do not wish to answer" or "No".
  */
-async function fillWorkdaySelfIdentify(page: Page) {
-  // Same approach as voluntary disclosures
+async function fillWorkdaySelfIdentify(page: Page, profile: ApplicantProfile) {
+  const qa = profile.qa;
+
+  // If user provided specific disability status, try to select it
+  if (qa && qa.disabilityStatus === "Yes") {
+    try {
+      const yesOption = page.locator('label:has-text("Yes, I Have A Disability"), label:has-text("Yes, I have a disability")').first();
+      if (await yesOption.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await yesOption.click().catch(() => {});
+        await humanDelay();
+      }
+    } catch { /* non-critical */ }
+  } else if (qa && qa.disabilityStatus === "No") {
+    try {
+      const noOption = page.locator('label:has-text("No, I Don\'t Have a Disability"), label:has-text("No, I don\'t have a disability")').first();
+      if (await noOption.isVisible({ timeout: 1000 }).catch(() => false)) {
+        await noOption.click().catch(() => {});
+        await humanDelay();
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Same approach as voluntary disclosures for remaining unanswered questions
   const declineLabels = [
     "I do not wish to answer",
     "I don't wish to answer",

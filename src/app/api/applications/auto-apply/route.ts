@@ -330,10 +330,11 @@ export async function POST() {
     .slice(0, Math.min(remaining, 1)); // Max 1 at a time to prevent OOM on 512MB Render starter
   console.log("[AutoApply] Found", scoredJobs.length, "matching jobs, top scores:", scoredJobs.slice(0, 5).map(j => `${j.job.title}: ${j.score}%`));
 
-  // Fetch user profile for Playwright automation
-  const [user, userProfile] = await Promise.all([
+  // Fetch user profile and application answers for Playwright automation
+  const [user, userProfile, answers] = await Promise.all([
     prisma.user.findFirst({ where: { id: session.user.id } }),
     prisma.userProfile.findFirst({ where: { userId: session.user.id } }),
+    prisma.applicationAnswers.findFirst({ where: { userId: session.user.id } }),
   ]);
 
   const nameParts = (user?.name || "").split(" ");
@@ -392,6 +393,24 @@ export async function POST() {
     resumePath: resumePath || undefined,
     applyEmail: applyEmailCreds?.address,
     applyEmailPassword: applyEmailCreds?.password,
+    qa: answers ? {
+      authorizedToWork: answers.authorizedToWork,
+      requireSponsorship: answers.requireSponsorship,
+      isOver18: answers.isOver18,
+      hasDriversLicense: answers.hasDriversLicense,
+      hasFelonyConviction: answers.hasFelonyConviction,
+      willingToRelocate: answers.willingToRelocate,
+      willingToTravel: answers.willingToTravel,
+      desiredSalary: answers.desiredSalary ?? undefined,
+      availableStartDate: answers.availableStartDate ?? undefined,
+      howDidYouHear: answers.howDidYouHear,
+      yearsOfExperience: answers.yearsOfExperience,
+      highestEducation: answers.highestEducation,
+      gender: answers.gender,
+      race: answers.race,
+      veteranStatus: answers.veteranStatus,
+      disabilityStatus: answers.disabilityStatus,
+    } : undefined,
   };
 
   // Create Application records and collect automation tasks (don't start yet)

@@ -66,9 +66,10 @@ export async function POST(req: Request) {
   // If there's an apply URL, launch Playwright automation in the background
   if (job.applyUrl) {
     // Fetch user profile data for form filling
-    const [user, userProfile] = await Promise.all([
+    const [user, userProfile, answers] = await Promise.all([
       prisma.user.findFirst({ where: { id: session.user.id } }),
       prisma.userProfile.findFirst({ where: { userId: session.user.id } }),
+      prisma.applicationAnswers.findFirst({ where: { userId: session.user.id } }),
     ]);
 
     const nameParts = (user?.name || "").split(" ");
@@ -95,6 +96,24 @@ export async function POST(req: Request) {
       resumePath: resumePath || undefined,
       applyEmail: applyEmailCreds?.address,
       applyEmailPassword: applyEmailCreds?.password,
+      qa: answers ? {
+        authorizedToWork: answers.authorizedToWork,
+        requireSponsorship: answers.requireSponsorship,
+        isOver18: answers.isOver18,
+        hasDriversLicense: answers.hasDriversLicense,
+        hasFelonyConviction: answers.hasFelonyConviction,
+        willingToRelocate: answers.willingToRelocate,
+        willingToTravel: answers.willingToTravel,
+        desiredSalary: answers.desiredSalary ?? undefined,
+        availableStartDate: answers.availableStartDate ?? undefined,
+        howDidYouHear: answers.howDidYouHear,
+        yearsOfExperience: answers.yearsOfExperience,
+        highestEducation: answers.highestEducation,
+        gender: answers.gender,
+        race: answers.race,
+        veteranStatus: answers.veteranStatus,
+        disabilityStatus: answers.disabilityStatus,
+      } : undefined,
     };
 
     // Run automation in the background (don't block the API response)

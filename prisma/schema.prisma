@@ -22,18 +22,19 @@ model User {
   gmailRefreshToken String?
   gmailConnectedAt  DateTime?
 
-  accounts     Account[]
-  sessions     Session[]
-  profile      UserProfile?
-  resumes      Resume[]
-  coverLetters CoverLetter[]
-  applications Application[]
-  savedJobs    SavedJob[]
-  interviews   InterviewSession[]
-  preferences  JobPreference?
-  subscription Subscription?
-  aiUsage      AIUsageLog[]
-  applyEmail   ApplyEmail?
+  accounts           Account[]
+  sessions           Session[]
+  profile            UserProfile?
+  resumes            Resume[]
+  coverLetters       CoverLetter[]
+  applications       Application[]
+  savedJobs          SavedJob[]
+  interviews         InterviewSession[]
+  preferences        JobPreference?
+  subscription       Subscription?
+  aiUsage            AIUsageLog[]
+  applyEmail         ApplyEmail?
+  applicationAnswers ApplicationAnswers?
 }
 
 model Account {
@@ -324,6 +325,47 @@ model ApplyEmail {
   localPart String
   password  String
   createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Application Questionnaire Answers ───────────────────────────────────────
+
+model ApplicationAnswers {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+
+  // Work authorization
+  authorizedToWork      Boolean  @default(true)
+  requireSponsorship    Boolean  @default(false)
+
+  // Personal
+  isOver18              Boolean  @default(true)
+  hasDriversLicense     Boolean  @default(false)
+  hasFelonyConviction   Boolean  @default(false)
+  willingToRelocate     Boolean  @default(true)
+  willingToTravel       Boolean  @default(true)
+
+  // Preferences
+  desiredSalary         Int?
+  availableStartDate    String?  // "Immediately", "2 weeks", "1 month", specific date
+  howDidYouHear         String   @default("Job Board")
+  yearsOfExperience     Int      @default(0)
+  highestEducation      String   @default("Bachelor's")
+
+  // EEO (Equal Employment Opportunity) - voluntary
+  gender                String   @default("Decline to answer")
+  race                  String   @default("Decline to answer")
+  veteranStatus         String   @default("Decline to answer")
+  disabilityStatus      String   @default("Decline to answer")
+
+  // Additional
+  linkedinUrl           String?
+  portfolioUrl          String?
+  preferredName         String?
+  customAnswers         String   @default("{}")  // JSON for any custom Q&A
+
+  updatedAt             DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

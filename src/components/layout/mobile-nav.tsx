@@ -6,11 +6,13 @@ import { cn } from "@/lib/utils";
 import {
   FileText, Mail, Search, Briefcase, Zap, Inbox,
   MessageSquare, Users, BarChart3, Settings, LayoutDashboard, Upload,
+  ClipboardList,
 } from "lucide-react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/upload", label: "Upload Resume", icon: Upload },
+  { href: "/questionnaire", label: "App Questions", icon: ClipboardList },
   { href: "/resume", label: "Resumes", icon: FileText },
   { href: "/cover-letter", label: "Cover Letters", icon: Mail },
   { href: "/resume/scanner", label: "Resume Scanner", icon: Search },
