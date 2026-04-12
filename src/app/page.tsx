@@ -488,9 +488,16 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-border bg-card/50 py-8">
-        <div className="max-w-7xl mx-auto px-4 text-center text-sm text-muted-foreground">
-          <p>&copy; 2026 iAutoApply. All rights reserved.</p>
+      <footer className="border-t border-border bg-card/50 py-12">
+        <div className="max-w-7xl mx-auto px-4">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            <p className="text-sm text-muted-foreground">&copy; 2026 iAutoApply. All rights reserved.</p>
+            <div className="flex items-center gap-6 text-sm text-muted-foreground">
+              <a href="/privacy" className="hover:text-foreground transition-colors">Privacy Policy</a>
+              <a href="/terms" className="hover:text-foreground transition-colors">Terms of Service</a>
+              <a href="mailto:pskomo123@gmail.com" className="hover:text-foreground transition-colors">Contact</a>
+            </div>
+          </div>
         </div>
       </footer>
 
