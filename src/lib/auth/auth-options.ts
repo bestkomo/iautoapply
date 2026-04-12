@@ -13,7 +13,7 @@ export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
   pages: {
     signIn: "/login",
-    newUser: "/onboarding",
+    newUser: "/upload",
   },
   providers: [
     GoogleProvider({

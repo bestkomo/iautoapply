@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -108,6 +109,7 @@ function FormSelect({
 }
 
 export default function QuestionnairePage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -188,7 +190,8 @@ export default function QuestionnairePage() {
         }),
       });
       if (res.ok) {
-        toast.success("Application answers saved successfully");
+        toast.success("Application answers saved! Redirecting to auto-apply...");
+        setTimeout(() => router.push("/auto-apply"), 1500);
       } else {
         const err = await res.json().catch(() => ({}));
         toast.error(err.error || "Failed to save answers");

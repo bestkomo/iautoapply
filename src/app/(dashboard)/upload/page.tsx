@@ -779,10 +779,10 @@ export default function UploadResumePage() {
               <Button
                 size="lg"
                 className="w-full gap-2.5 h-13 text-base font-semibold bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-600/20 hover:shadow-green-600/30 transition-all duration-200"
-                onClick={() => router.push("/auto-apply")}
+                onClick={() => router.push("/questionnaire")}
               >
                 <Zap className="h-5 w-5" />
-                Start Auto-Applying
+                Complete Application Questions
                 {jobsFound !== null && jobsFound > 0 && (
                   <span className="ml-0.5">
                     to {jobsFound} Job{jobsFound !== 1 ? "s" : ""}
