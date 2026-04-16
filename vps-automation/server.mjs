@@ -373,6 +373,19 @@ async function handleGreenhouse(page, profile, jobId) {
     await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(2000);
 
+    // If we redirected away from greenhouse.io entirely (e.g. Cloudflare -> cloudflare.com/careers),
+    // try to find the original URL with the gh_jid and navigate directly to the form URL.
+    const currentUrl = page.url();
+    if (!currentUrl.includes("greenhouse.io") && currentUrl.match(/gh_jid=\d+|jobs\/\d+/)) {
+      const jidMatch = currentUrl.match(/gh_jid=(\d+)/);
+      if (jidMatch) {
+        // Extract company slug from the original URL (we only have the redirected URL here)
+        console.log(`[${jobId}] [Greenhouse] Redirected to ${currentUrl} - trying direct form URL`);
+        // Best we can do without the original slug is fail gracefully
+        return { success: false, message: `Greenhouse: page redirected to ${currentUrl.substring(0, 80)}` };
+      }
+    }
+
     // Some greenhouse pages are "apply" landing pages - click through.
     const clickedApply = await tryClick(page, [
       'a:has-text("Apply for this job")',

@@ -19,7 +19,9 @@
       "Bash(node scripts/create-test-account.mjs)",
       "Bash(node scripts/grant-admin.mjs)",
       "Bash(curl -s \"https://iautoaply.com/api/profile\" -H \"Cookie: dummy\")",
-      "Bash(curl -s \"https://iautoaply.com/api/profile\")"
+      "Bash(curl -s \"https://iautoaply.com/api/profile\")",
+      "Bash(curl -sI \"https://iautoaply.com/auto-apply\")",
+      "Bash(curl -sI \"https://boards.greenhouse.io/cloudflare/jobs/7605329\")"
     ]
   }
 }
