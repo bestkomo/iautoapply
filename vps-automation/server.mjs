@@ -364,21 +364,92 @@ async function handleGreenhouse(page, profile, jobId) {
       'a:has-text("Apply for this Job")',
       'button:has-text("Apply")',
     ]);
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(2500);
 
-    // Basic fields.
-    await tryFill(page, 'input[name="first_name"], input[id*="first_name" i], input[autocomplete="given-name"]', profile.firstName);
-    await tryFill(page, 'input[name="last_name"], input[id*="last_name" i], input[autocomplete="family-name"]', profile.lastName);
-    await tryFill(page, 'input[type="email"], input[name*="email" i]', profile.email);
-    await tryFill(page, 'input[type="tel"], input[name*="phone" i]', profile.phone || "");
+    // Wait for the form to actually appear (look for first_name field)
+    try {
+      await page.waitForSelector('input[name="first_name"], input[id*="first_name" i], input[autocomplete="given-name"]', { timeout: 8000 });
+    } catch {
+      console.log(`[${jobId}] [Greenhouse] First name field not visible after wait`);
+    }
 
-    // Resume upload - try several selectors that Greenhouse uses.
+    // Basic fields - use broader selectors and verify each fill.
+    const filledFirstName = await tryFill(page, 'input[name="first_name"], input[id*="first_name" i], input[autocomplete="given-name"]', profile.firstName);
+    const filledLastName = await tryFill(page, 'input[name="last_name"], input[id*="last_name" i], input[autocomplete="family-name"]', profile.lastName);
+
+    // EMAIL - try MANY selectors and verify
+    let emailFilled = false;
+    const emailSelectors = [
+      'input[type="email"]',
+      'input[name="email"]',
+      'input[id="email"]',
+      'input[name*="email" i]',
+      'input[id*="email" i]',
+      'input[autocomplete="email"]',
+      'input[placeholder*="email" i]',
+      'input[aria-label*="email" i]',
+    ];
+    for (const sel of emailSelectors) {
+      if (await tryFill(page, sel, profile.email)) {
+        emailFilled = true;
+        console.log(`[${jobId}] [Greenhouse] Email filled via ${sel}`);
+        break;
+      }
+    }
+    if (!emailFilled) {
+      console.log(`[${jobId}] [Greenhouse] Email NOT filled - trying focus+type fallback`);
+      try {
+        // Last resort: find any input near label "Email" and focus+type
+        const emailInput = page.locator('label:has-text("Email") + input, label:has-text("Email") ~ input, label:has-text("Email") ~ * input').first();
+        if (await emailInput.isVisible({ timeout: 1500 })) {
+          await emailInput.click();
+          await emailInput.fill(profile.email);
+          emailFilled = true;
+          console.log(`[${jobId}] [Greenhouse] Email filled via label-adjacent`);
+        }
+      } catch {}
+    }
+
+    // PHONE
+    await tryFill(page, 'input[type="tel"], input[name*="phone" i], input[id*="phone" i], input[autocomplete="tel"]', profile.phone || "");
+
+    console.log(`[${jobId}] [Greenhouse] Filled: firstName=${filledFirstName}, lastName=${filledLastName}, email=${emailFilled}`);
+
+    // Legal Name field (different from first/last name on some forms)
+    const fullName = profile.name || `${profile.firstName} ${profile.lastName}`.trim();
+    await tryFill(page, 'input[name*="legal" i]:not([type="checkbox"]), input[id*="legal" i]:not([type="checkbox"]), input[aria-label*="legal" i]:not([type="checkbox"])', fullName);
+    await tryFill(page, 'input[name*="full_name" i], input[id*="full_name" i]', fullName);
+    await tryFill(page, 'input[name="name"]:not([name*="user"])', fullName);
+
+    // Resume upload - Greenhouse hides the file input, we need to find it directly
     if (profile.resumePath) {
-      const uploaded =
-        (await tryUpload(page, 'input[type="file"][id*="resume" i]', profile.resumePath)) ||
-        (await tryUpload(page, 'input[type="file"][name*="resume" i]', profile.resumePath)) ||
-        (await tryUpload(page, 'input[type="file"]', profile.resumePath));
-      if (uploaded) await page.waitForTimeout(1500);
+      // Try every possible Greenhouse file input pattern (they're often hidden)
+      let uploaded = false;
+      const fileSelectors = [
+        'input[type="file"][id*="resume" i]',
+        'input[type="file"][name*="resume" i]',
+        'input[type="file"][id*="cv" i]',
+        'input[type="file"][aria-label*="resume" i]',
+        'input[type="file"]',
+      ];
+      for (const sel of fileSelectors) {
+        try {
+          const inputs = await page.locator(sel).all();
+          for (const input of inputs) {
+            try {
+              await input.setInputFiles(profile.resumePath, { timeout: 3000 });
+              uploaded = true;
+              console.log(`[${jobId}] [Greenhouse] Resume uploaded via ${sel}`);
+              break;
+            } catch (e) {
+              // try next input
+            }
+          }
+          if (uploaded) break;
+        } catch {}
+      }
+      console.log(`[${jobId}] [Greenhouse] Resume upload: ${uploaded ? "SUCCESS" : "FAILED"}`);
+      if (uploaded) await page.waitForTimeout(2500);
     }
 
     // Cover letter (optional)
@@ -493,32 +564,129 @@ async function fillGreenhouseAutocomplete(page, labelKeywords, value) {
 }
 
 async function fillGreenhouseCustomQuestions(page, profile) {
-  if (!profile || !profile.qa) return;
-  // Match each label to a qa entry.
-  try {
-    const labels = await page.locator("label").all();
-    for (const lbl of labels) {
-      const text = (await lbl.innerText().catch(() => "")).toLowerCase().trim();
-      if (!text) continue;
-      const answer = findQaAnswer(profile, [text]) || findQaAnswer(profile, text.split(/\s+/));
-      if (!answer) continue;
-      // Find the associated input/select/textarea via for= or sibling.
-      const forAttr = await lbl.getAttribute("for");
-      if (forAttr) {
-        const field = page.locator(`#${cssEscape(forAttr)}`).first();
-        if (await field.isVisible({ timeout: 300 }).catch(() => false)) {
-          const tag = await field.evaluate(el => el.tagName.toLowerCase()).catch(() => "");
-          if (tag === "select") {
-            await field.selectOption({ label: String(answer) }).catch(async () => {
-              await field.selectOption(String(answer)).catch(() => {});
-            });
-          } else {
-            await field.fill(String(answer)).catch(() => {});
+  // First try to match labels with QA data
+  if (profile && profile.qa) {
+    try {
+      const labels = await page.locator("label").all();
+      for (const lbl of labels) {
+        const text = (await lbl.innerText().catch(() => "")).toLowerCase().trim();
+        if (!text) continue;
+        const answer = findQaAnswer(profile, [text]) || findQaAnswer(profile, text.split(/\s+/));
+        if (!answer) continue;
+        const forAttr = await lbl.getAttribute("for");
+        if (forAttr) {
+          const field = page.locator(`#${cssEscape(forAttr)}`).first();
+          if (await field.isVisible({ timeout: 300 }).catch(() => false)) {
+            const tag = await field.evaluate(el => el.tagName.toLowerCase()).catch(() => "");
+            if (tag === "select") {
+              await field.selectOption({ label: String(answer) }).catch(async () => {
+                await field.selectOption(String(answer)).catch(() => {});
+              });
+            } else {
+              await field.fill(String(answer)).catch(() => {});
+            }
           }
         }
       }
+    } catch {}
+  }
+
+  // Fill any remaining empty required dropdowns with sensible defaults
+  await fillEmptyGreenhouseSelects(page, profile);
+}
+
+async function fillEmptyGreenhouseSelects(page, profile) {
+  const qa = profile?.qa || {};
+  try {
+    // Native <select> elements - pick first non-empty option for required ones
+    const selects = await page.locator('select[required], select').all();
+    for (const sel of selects) {
+      try {
+        if (!(await sel.isVisible({ timeout: 200 }))) continue;
+        const value = await sel.inputValue().catch(() => "");
+        if (value) continue; // already filled
+
+        // Get the label text to make smarter choices
+        const labelText = await sel.evaluate((el) => {
+          const id = el.id;
+          const label = document.querySelector(`label[for="${id}"]`);
+          return (label?.textContent || el.getAttribute("aria-label") || "").toLowerCase();
+        }).catch(() => "");
+
+        // Get all options
+        const options = await sel.locator("option").all();
+        if (options.length < 2) continue;
+
+        let chosenLabel = "";
+
+        // Smart matching - PREFER user's questionnaire answers over defaults
+        if (labelText.includes("sponsor") || labelText.includes("visa") || labelText.includes("immigration")) {
+          chosenLabel = qa.requireSponsorship === true ? "Yes" : "No";
+        } else if (labelText.includes("authorized") || labelText.includes("eligible to work") || labelText.includes("legally") || labelText.includes("right to work")) {
+          chosenLabel = qa.authorizedToWork === false ? "No" : "Yes";
+        } else if (labelText.includes("over 18") || labelText.includes("18 years") || labelText.includes("age of 18")) {
+          chosenLabel = qa.isOver18 === false ? "No" : "Yes";
+        } else if (labelText.includes("driver") && labelText.includes("license")) {
+          chosenLabel = qa.hasDriversLicense === true ? "Yes" : "No";
+        } else if (labelText.includes("felony") || labelText.includes("conviction") || labelText.includes("convicted")) {
+          chosenLabel = qa.hasFelonyConviction === true ? "Yes" : "No";
+        } else if (labelText.includes("relocat")) {
+          chosenLabel = qa.willingToRelocate === false ? "No" : "Yes";
+        } else if (labelText.includes("travel")) {
+          chosenLabel = qa.willingToTravel === false ? "No" : "Yes";
+        } else if (labelText.includes("years") && labelText.includes("experience")) {
+          chosenLabel = qa.yearsOfExperience ? String(qa.yearsOfExperience) : "5";
+        } else if (labelText.includes("education") || labelText.includes("degree")) {
+          chosenLabel = qa.highestEducation || "Bachelor";
+        } else if (labelText.includes("hear") || labelText.includes("source") || labelText.includes("referral")) {
+          chosenLabel = qa.howDidYouHear || "LinkedIn";
+        } else if (labelText.includes("salary") || labelText.includes("compensation")) {
+          chosenLabel = qa.desiredSalary ? String(qa.desiredSalary) : "Negotiable";
+        } else if (labelText.includes("start date") || labelText.includes("availability")) {
+          chosenLabel = qa.availableStartDate || "Immediately";
+        } else if (labelText.includes("gender")) {
+          chosenLabel = qa.gender || "Decline to";
+        } else if (labelText.includes("race") || labelText.includes("ethnicity")) {
+          chosenLabel = qa.race || "Decline to";
+        } else if (labelText.includes("veteran")) {
+          chosenLabel = qa.veteranStatus || "Decline to";
+        } else if (labelText.includes("disab")) {
+          chosenLabel = qa.disabilityStatus || "Decline to";
+        }
+
+        // Try to match the smart choice
+        if (chosenLabel) {
+          for (const opt of options) {
+            const text = (await opt.textContent().catch(() => "") || "").trim();
+            if (text.toLowerCase().includes(chosenLabel.toLowerCase())) {
+              const val = await opt.getAttribute("value").catch(() => null);
+              if (val) {
+                await sel.selectOption(val).catch(() => {});
+                console.log(`[Greenhouse] Auto-selected "${text}" for "${labelText.substring(0, 40)}"`);
+                break;
+              }
+            }
+          }
+        }
+
+        // If still empty, just pick the first non-empty option
+        const newValue = await sel.inputValue().catch(() => "");
+        if (!newValue) {
+          for (const opt of options) {
+            const val = await opt.getAttribute("value").catch(() => null);
+            const text = (await opt.textContent().catch(() => "") || "").trim();
+            if (val && text && !text.toLowerCase().includes("select")) {
+              await sel.selectOption(val).catch(() => {});
+              console.log(`[Greenhouse] Default-selected "${text}" for "${labelText.substring(0, 40)}"`);
+              break;
+            }
+          }
+        }
+      } catch {}
     }
-  } catch {}
+  } catch (err) {
+    console.error("[Greenhouse] Error filling empty selects:", err.message);
+  }
 }
 
 function cssEscape(s) {
