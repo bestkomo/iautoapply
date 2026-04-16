@@ -378,7 +378,10 @@ export default function AutoApplyPage() {
 
   async function handleToggle() {
     if (!status) return;
-    if (userPlan === "FREE") return; // Block free users
+    // Only block if on FREE AND daily limit looks like the Free tier cap (<=5/day).
+    // Otherwise trust the backend — server-side enforcement still applies.
+    const maxDaily = status?.preferences?.maxPerDay ?? 50;
+    if (userPlan === "FREE" && maxDaily <= 5) return;
     setToggling(true);
     try {
       if (status.enabled) {
@@ -441,7 +444,10 @@ export default function AutoApplyPage() {
       </div>
 
       {/* -------- Upgrade Wall for Free Users -------- */}
-      {userPlan === "FREE" && (
+      {/* Hide if the user's daily limit exceeds Free (5/day) — that's a reliable
+          server-side signal that they're on a paid tier, even before subscription
+          data loads. */}
+      {userPlan === "FREE" && maxPerDay <= 5 && (
         <Card className="border-2 border-primary/50 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950/30 dark:to-purple-950/30">
           <CardContent className="p-6">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

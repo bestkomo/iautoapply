@@ -17,7 +17,9 @@
       "Bash(node -e ' *)",
       "Bash(grep -v \"^$\")",
       "Bash(node scripts/create-test-account.mjs)",
-      "Bash(node scripts/grant-admin.mjs)"
+      "Bash(node scripts/grant-admin.mjs)",
+      "Bash(curl -s \"https://iautoaply.com/api/profile\" -H \"Cookie: dummy\")",
+      "Bash(curl -s \"https://iautoaply.com/api/profile\")"
     ]
   }
 }
