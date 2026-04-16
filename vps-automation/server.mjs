@@ -1737,6 +1737,8 @@ async function fillAllGreenhouseReactSelects(page, profile, jobId) {
         div.setAttribute("data-gh-marker", marker);
         results.push({ type: "react", marker, labelText });
       });
+
+      return results;
     });
 
     // Count total select__control divs on page for debugging
