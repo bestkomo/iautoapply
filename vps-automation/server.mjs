@@ -486,6 +486,12 @@ async function handleGreenhouse(page, profile, jobId) {
     // Custom questions from qa profile
     await fillGreenhouseCustomQuestions(page, profile);
 
+    // Handle ALL React Select dropdowns on page (Yes/No, state of residence, etc.)
+    await fillAllGreenhouseReactSelects(page, profile, jobId);
+
+    // Handle privacy/terms checkboxes
+    await checkGreenhouseRequiredCheckboxes(page, jobId);
+
     // Scroll to bottom so every field renders and lazy validators fire.
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(1000);
@@ -1536,6 +1542,320 @@ Respond with ONLY the exact text or id of the submit button (no quotes, no expla
   } catch (err) {
     console.error(`[${jobId}] [Generic-AI] Error:`, err.message);
     return { success: false, message: `Generic-AI: ${err.message}` };
+  }
+}
+
+// ============================================================================
+// Greenhouse React Select handler (custom dropdowns)
+// ============================================================================
+
+/**
+ * Determines what answer to pick for a given Greenhouse dropdown question
+ * based on the question's label text and the user's QA data.
+ */
+function answerForReactSelect(labelText, qa, profile) {
+  const t = labelText.toLowerCase();
+
+  // Work authorization
+  if (t.includes("legally allowed to work") || t.includes("authorized to work") || t.includes("legally authorized") || t.includes("right to work")) {
+    return qa.authorizedToWork === false ? "No" : "Yes";
+  }
+  if (t.includes("sponsorship") || t.includes("require visa") || (t.includes("visa") && t.includes("require"))) {
+    return qa.requireSponsorship === true ? "Yes" : "No";
+  }
+  // Visa status dropdown
+  if (t.includes("visa status") || t.includes("work authorization status")) {
+    return qa.visaStatus || "US Citizen";
+  }
+  // Age & legal
+  if (t.includes("18 years") || t.includes("over 18") || t.includes("age of 18") || t.includes("at least 18")) {
+    return qa.isOver18 === false ? "No" : "Yes";
+  }
+  if (t.includes("driver") && t.includes("license")) {
+    return qa.hasDriversLicense ? "Yes" : "No";
+  }
+  if (t.includes("felony") || t.includes("convicted")) {
+    return qa.hasFelonyConviction ? "Yes" : "No";
+  }
+  if (t.includes("misdemeanor")) {
+    return qa.hasMisdemeanor ? "Yes" : "No";
+  }
+  // Background / drug
+  if (t.includes("background check")) {
+    return qa.hasBackgroundCheck === false ? "No" : "Yes";
+  }
+  if (t.includes("drug test") || t.includes("drug screen")) {
+    return qa.hasDrugTest === false ? "No" : "Yes";
+  }
+  // Confirmations
+  if (t.includes("compensation") && (t.includes("confirm") || t.includes("understand") || t.includes("reviewed") || t.includes("agree"))) {
+    return "Yes";
+  }
+  if (t.includes("confirm") || t.includes("acknowledge") || t.includes("understand") || t.includes("agree")) {
+    return "Yes";
+  }
+  // Travel/relocate/work modes
+  if (t.includes("relocat")) {
+    return qa.willingToRelocate === false ? "No" : "Yes";
+  }
+  if (t.includes("travel")) {
+    return qa.willingToTravel === false ? "No" : "Yes";
+  }
+  if (t.includes("overtime")) {
+    return qa.willingOvertime === false ? "No" : "Yes";
+  }
+  if (t.includes("weekend")) {
+    return qa.willingWeekends === false ? "No" : "Yes";
+  }
+  // Healthcare-specific
+  if (t.includes("nursing license") || (t.includes("rn") && t.includes("license"))) {
+    return qa.hasNursingLicense ? "Yes" : "No";
+  }
+  if (t.includes("cpr") && (t.includes("certif") || t.includes("current"))) {
+    return qa.hasCPR ? "Yes" : "No";
+  }
+  if (t.includes("bls") && (t.includes("certif") || t.includes("current"))) {
+    return qa.hasBLS ? "Yes" : "No";
+  }
+  // Reference / patient relationship
+  if (t.includes("previously been a patient") || t.includes("currently a patient") || (t.includes("patient") && t.includes("never"))) {
+    return "I confirm";
+  }
+  if (t.includes("currently and have never been")) {
+    return "I confirm";
+  }
+  if (t.includes("worked for") && (t.includes("previously") || t.includes("any capacity"))) {
+    return "No"; // user hasn't worked for the company before
+  }
+  // EEO
+  if (t.includes("gender")) {
+    return qa.gender || "Decline to";
+  }
+  if (t.includes("race") || t.includes("ethnicity")) {
+    return qa.race || "Decline to";
+  }
+  if (t.includes("hispanic") || t.includes("latino")) {
+    return qa.hispanicLatino || "Decline to";
+  }
+  if (t.includes("veteran") || t.includes("military")) {
+    return qa.veteranStatus || "Decline to";
+  }
+  if (t.includes("disab")) {
+    return qa.disabilityStatus || "Decline to";
+  }
+  if (t.includes("pronoun")) {
+    return qa.pronouns || "Decline";
+  }
+  if (t.includes("age range") || (t.includes("age") && t.includes("range"))) {
+    return qa.ageRange || "Decline to";
+  }
+  // Education
+  if (t.includes("highest level of education") || t.includes("highest degree") || t.includes("level of education")) {
+    return qa.highestEducation || "Bachelor";
+  }
+  // State of residence
+  if (t.includes("legal state") || t.includes("state of residence") || t.includes("home state") || t.includes("state where you live") || t.includes("state in which you reside")) {
+    return qa.state || "Texas";
+  }
+  // Country (smaller checks since some are radios)
+  if (t === "country" || t.startsWith("country")) {
+    return qa.country || "United States";
+  }
+  // Years of experience as numeric dropdown
+  if (t.includes("years") && t.includes("experience")) {
+    const yrs = qa.yearsOfExperience || 5;
+    return String(yrs);
+  }
+  // Employment type
+  if (t.includes("preferred work") || t.includes("employment type") || t.includes("work type")) {
+    return qa.preferredWorkType || "Full-time";
+  }
+  // Notice period
+  if (t.includes("notice period") || (t.includes("notice") && t.includes("required"))) {
+    return qa.noticeRequired || "2 weeks";
+  }
+  // Default for unknown Yes/No-style questions
+  if (t.includes("?")) {
+    return "Yes"; // most questions default to Yes
+  }
+  return null;
+}
+
+/**
+ * Finds and fills ALL Greenhouse React Select dropdowns on the page.
+ * These are the custom <select> components that aren't native <select> elements.
+ */
+async function fillAllGreenhouseReactSelects(page, profile, jobId) {
+  const qa = profile?.qa || {};
+  let filledCount = 0;
+
+  try {
+    // Greenhouse uses divs with role="combobox" or class containing "select" for React Select
+    // Find all dropdowns: native selects, comboboxes, and React Select containers
+    const dropdownInfos = await page.evaluate(() => {
+      const results = [];
+
+      // Native selects
+      document.querySelectorAll('select').forEach((sel, idx) => {
+        if (sel.value) return; // already filled
+        const label = document.querySelector(`label[for="${sel.id}"]`);
+        const labelText = (label?.textContent || sel.getAttribute("aria-label") || "").trim();
+        if (!labelText) return;
+        results.push({ type: "native", idx, id: sel.id, name: sel.name, labelText });
+      });
+
+      // React Select containers — find divs that look like Greenhouse's react-select
+      document.querySelectorAll('[class*="select__control"], [class*="Select__control"], [role="combobox"]').forEach((div, idx) => {
+        // Check if it has a value already (look for inner span with text or class indicating value)
+        const hasValue = div.querySelector('[class*="singleValue"], [class*="Single-value"]');
+        if (hasValue && hasValue.textContent && hasValue.textContent.trim() !== "Select...") return;
+
+        // Find the label - look for nearest sibling/parent label
+        let labelText = "";
+        let parent = div.parentElement;
+        for (let i = 0; i < 5 && parent && !labelText; i++) {
+          const lbl = parent.querySelector("label");
+          if (lbl) labelText = lbl.textContent.trim();
+          parent = parent.parentElement;
+        }
+        if (!labelText) {
+          const ariaLabel = div.getAttribute("aria-label");
+          if (ariaLabel) labelText = ariaLabel;
+        }
+        if (!labelText) return;
+
+        // Mark this dropdown with a unique data-attribute so we can find it from outside
+        const marker = `gh-rs-${Date.now()}-${idx}`;
+        div.setAttribute("data-gh-marker", marker);
+        results.push({ type: "react", marker, labelText });
+      });
+    });
+
+    if (!dropdownInfos || dropdownInfos.length === 0) {
+      console.log(`[${jobId}] [Greenhouse] No empty dropdowns found`);
+      return;
+    }
+
+    console.log(`[${jobId}] [Greenhouse] Found ${dropdownInfos.length} empty dropdowns to fill`);
+
+    for (const info of dropdownInfos) {
+      const answer = answerForReactSelect(info.labelText, qa, profile);
+      if (!answer) {
+        console.log(`[${jobId}] [Greenhouse] No answer for: "${info.labelText.substring(0, 60)}"`);
+        continue;
+      }
+
+      try {
+        if (info.type === "native") {
+          // Try selecting by label, then by value, then partial match
+          const sel = page.locator(`select[id="${info.id}"]`).first();
+          const filled =
+            (await sel.selectOption({ label: answer }).then(() => true).catch(() => false)) ||
+            (await sel.selectOption(answer).then(() => true).catch(() => false)) ||
+            (await sel.evaluate((el, ans) => {
+              const opts = Array.from(el.options);
+              const m = opts.find(o => o.text.toLowerCase().includes(ans.toLowerCase()));
+              if (m) { el.value = m.value; el.dispatchEvent(new Event("change", { bubbles: true })); return true; }
+              return false;
+            }, answer).catch(() => false));
+
+          if (filled) {
+            filledCount++;
+            console.log(`[${jobId}] [Greenhouse] Native select "${info.labelText.substring(0, 50)}" → "${answer}"`);
+          }
+        } else {
+          // React Select - click the marker, type, click option
+          const div = page.locator(`[data-gh-marker="${info.marker}"]`).first();
+          if (!(await div.isVisible({ timeout: 500 }))) continue;
+
+          await div.click({ timeout: 2000 });
+          await page.waitForTimeout(400);
+
+          // Type the answer to filter options
+          await page.keyboard.type(answer, { delay: 30 });
+          await page.waitForTimeout(700);
+
+          // Try to click the matching option
+          const optionSelectors = [
+            `[role="option"]:has-text("${answer}")`,
+            `[id*="option"]:has-text("${answer}")`,
+            `[class*="option"]:has-text("${answer}")`,
+            `li:has-text("${answer}")`,
+          ];
+          let clicked = false;
+          for (const optSel of optionSelectors) {
+            try {
+              const opt = page.locator(optSel).first();
+              if (await opt.isVisible({ timeout: 800 })) {
+                await opt.click({ timeout: 2000 });
+                clicked = true;
+                break;
+              }
+            } catch {}
+          }
+
+          if (!clicked) {
+            // Fallback: press Enter to confirm first highlighted option
+            await page.keyboard.press("Enter");
+          }
+          await page.waitForTimeout(400);
+          filledCount++;
+          console.log(`[${jobId}] [Greenhouse] React-Select "${info.labelText.substring(0, 50)}" → "${answer}"`);
+        }
+      } catch (err) {
+        console.error(`[${jobId}] [Greenhouse] Failed dropdown "${info.labelText.substring(0, 40)}":`, err.message);
+      }
+    }
+    console.log(`[${jobId}] [Greenhouse] Filled ${filledCount}/${dropdownInfos.length} dropdowns`);
+  } catch (err) {
+    console.error(`[${jobId}] [Greenhouse] React-Select handler error:`, err.message);
+  }
+}
+
+/**
+ * Auto-checks any required confirmation/agreement checkboxes.
+ */
+async function checkGreenhouseRequiredCheckboxes(page, jobId) {
+  try {
+    const checkboxes = await page.locator('input[type="checkbox"]').all();
+    let checked = 0;
+    for (const cb of checkboxes) {
+      try {
+        if (!(await cb.isVisible({ timeout: 200 }))) continue;
+        if (await cb.isChecked().catch(() => false)) continue;
+
+        // Get the label text
+        const labelText = await cb.evaluate((el) => {
+          const id = el.id;
+          const lbl = document.querySelector(`label[for="${id}"]`);
+          return (lbl?.textContent || el.getAttribute("aria-label") || "").toLowerCase().trim();
+        }).catch(() => "");
+
+        // Only auto-check if it's a required confirmation/agreement
+        const isRequired = await cb.evaluate(el => el.hasAttribute("required") || el.getAttribute("aria-required") === "true").catch(() => false);
+        const looksConfirmation =
+          labelText.includes("confirm") ||
+          labelText.includes("agree") ||
+          labelText.includes("acknowledge") ||
+          labelText.includes("certify") ||
+          labelText.includes("understand") ||
+          labelText.includes("not currently and have never");
+
+        if (isRequired || looksConfirmation) {
+          await cb.check({ timeout: 1500 }).catch(async () => {
+            await cb.click({ timeout: 1500 }).catch(() => {});
+          });
+          checked++;
+          console.log(`[${jobId}] [Greenhouse] Checked: "${labelText.substring(0, 60)}"`);
+        }
+      } catch {}
+    }
+    if (checked > 0) {
+      console.log(`[${jobId}] [Greenhouse] Auto-checked ${checked} confirmation boxes`);
+      await page.waitForTimeout(500);
+    }
+  } catch (err) {
+    console.error(`[${jobId}] [Greenhouse] Checkbox handler error:`, err.message);
   }
 }
 
