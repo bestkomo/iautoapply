@@ -572,27 +572,120 @@ async function fillGreenhouseCustomQuestions(page, profile) {
         const text = (await lbl.innerText().catch(() => "")).toLowerCase().trim();
         if (!text) continue;
         const answer = findQaAnswer(profile, [text]) || findQaAnswer(profile, text.split(/\s+/));
-        if (!answer) continue;
+        if (answer === null || answer === undefined) continue;
+
         const forAttr = await lbl.getAttribute("for");
-        if (forAttr) {
-          const field = page.locator(`#${cssEscape(forAttr)}`).first();
-          if (await field.isVisible({ timeout: 300 }).catch(() => false)) {
-            const tag = await field.evaluate(el => el.tagName.toLowerCase()).catch(() => "");
-            if (tag === "select") {
-              await field.selectOption({ label: String(answer) }).catch(async () => {
-                await field.selectOption(String(answer)).catch(() => {});
-              });
-            } else {
-              await field.fill(String(answer)).catch(() => {});
-            }
+        if (!forAttr) continue;
+        const field = page.locator(`#${cssEscape(forAttr)}`).first();
+        if (!(await field.isVisible({ timeout: 300 }).catch(() => false))) continue;
+
+        const tag = await field.evaluate(el => el.tagName.toLowerCase()).catch(() => "");
+        const inputType = await field.getAttribute("type").catch(() => "");
+
+        if (tag === "select") {
+          // For dropdowns convert boolean to Yes/No
+          const value = typeof answer === "boolean" ? (answer ? "Yes" : "No") : String(answer);
+          await field.selectOption({ label: value }).catch(async () => {
+            await field.selectOption(value).catch(() => {});
+          });
+        } else if (tag === "textarea" || (tag === "input" && (inputType === "text" || inputType === "" || inputType === "tel" || inputType === "url"))) {
+          // For text fields, NEVER fill with boolean true/false
+          if (typeof answer === "boolean") continue;
+          // Skip if it's just a number for a non-numeric field
+          if (typeof answer === "number" && inputType !== "number") {
+            await field.fill(String(answer)).catch(() => {});
+          } else if (typeof answer === "string" && answer.trim()) {
+            await field.fill(answer.trim()).catch(() => {});
           }
         }
       }
     } catch {}
   }
 
+  // Smart text answers for common essay-style questions
+  await fillGreenhouseTextQuestions(page, profile);
+
   // Fill any remaining empty required dropdowns with sensible defaults
   await fillEmptyGreenhouseSelects(page, profile);
+}
+
+/**
+ * Handles common Greenhouse text/textarea questions with sensible answers.
+ */
+async function fillGreenhouseTextQuestions(page, profile) {
+  const qa = profile?.qa || {};
+  const fullName = profile?.name || "";
+
+  try {
+    const allInputs = await page.locator('input[type="text"], input:not([type]), textarea, input[type="tel"], input[type="url"]').all();
+
+    for (const input of allInputs) {
+      try {
+        if (!(await input.isVisible({ timeout: 200 }))) continue;
+        const currentValue = await input.inputValue().catch(() => "");
+        if (currentValue) continue; // already filled
+
+        // Get the label text
+        const labelText = await input.evaluate((el) => {
+          const id = el.id;
+          const label = document.querySelector(`label[for="${id}"]`);
+          return (label?.textContent || el.getAttribute("aria-label") || el.getAttribute("placeholder") || "").toLowerCase();
+        }).catch(() => "");
+
+        if (!labelText) continue;
+
+        let value = "";
+
+        // Match labels to sensible text answers
+        if (labelText.includes("why do you want") || labelText.includes("why are you interested") || labelText.includes("interest in")) {
+          value = "I'm excited about this opportunity because it aligns with my professional experience and career goals. The role offers a chance to contribute meaningfully while continuing to grow my skills.";
+        } else if (labelText.includes("from where") || labelText.includes("city and state") || labelText.includes("where do you intend to work") || labelText.includes("work location")) {
+          value = qa.city && qa.state ? `${qa.city}, ${qa.state}` : (profile.location || "");
+        } else if (labelText.includes("linkedin")) {
+          value = profile.linkedinUrl || qa.linkedinUrl || "";
+        } else if (labelText.includes("portfolio") || labelText.includes("website") || labelText.includes("personal site")) {
+          value = profile.portfolioUrl || qa.portfolioUrl || "";
+        } else if (labelText.includes("github")) {
+          value = profile.github || "";
+        } else if (labelText.includes("preferred name") || labelText.includes("nickname")) {
+          value = qa.preferredName || profile.firstName || "";
+        } else if (labelText.includes("street address") || (labelText.includes("address") && !labelText.includes("email"))) {
+          value = qa.streetAddress || "";
+        } else if (labelText.includes("zip") || labelText.includes("postal")) {
+          value = qa.zipCode || "";
+        } else if (labelText.includes("city")) {
+          value = qa.city || "";
+        } else if (labelText.includes("state") && !labelText.includes("statement")) {
+          value = qa.state || "";
+        } else if (labelText.includes("country")) {
+          value = qa.country || "United States";
+        } else if (labelText.includes("salary") && !labelText.includes("expect")) {
+          value = qa.currentSalary ? String(qa.currentSalary) : "Negotiable";
+        } else if (labelText.includes("expect") && labelText.includes("salary")) {
+          value = qa.salaryExpectation || "Negotiable";
+        } else if (labelText.includes("notice")) {
+          value = qa.noticeRequired || "2 weeks";
+        } else if (labelText.includes("years of experience") || labelText.includes("years experience")) {
+          value = qa.yearsOfExperience ? String(qa.yearsOfExperience) : "5";
+        } else if (labelText.includes("additional information") || labelText.includes("anything else") || labelText.includes("cover letter")) {
+          value = `Thank you for considering my application for this role. I am excited about the opportunity and look forward to discussing how my experience aligns with your team's needs.`;
+        } else if (labelText.includes("how did you hear") || labelText.includes("source")) {
+          value = qa.howDidYouHear || "LinkedIn";
+        } else if (labelText.includes("reference")) {
+          if (labelText.includes("name")) value = qa.referenceName1 || "";
+          else if (labelText.includes("email")) value = qa.referenceEmail1 || "";
+          else if (labelText.includes("phone")) value = qa.referencePhone1 || "";
+        }
+
+        if (value) {
+          await input.fill(value).catch(() => {});
+          console.log(`[Greenhouse] Filled text "${labelText.substring(0, 50)}" with "${value.substring(0, 60)}"`);
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.error("[Greenhouse] Text questions error:", err.message);
+  }
 }
 
 async function fillEmptyGreenhouseSelects(page, profile) {
