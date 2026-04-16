@@ -22,9 +22,18 @@ export function computeMatchScore(
   const prefSkills = fromJsonArray(preferences.skills as string);
   const prefDesiredLocations = fromJsonArray(preferences.desiredLocations as string);
 
+  // Use job description for skills matching since skills array is often unreliable.
+  // This searches for the user's skill keywords inside the job description text.
+  const skillsScoreFromDesc = computeSkillsScoreFromText(
+    job.description || "",
+    job.title || "",
+    jobSkills,
+    prefSkills
+  );
+
   const breakdown: MatchBreakdown = {
     titleScore: computeTitleScore(job.title, prefDesiredTitles),
-    skillsScore: computeSkillsScore(jobSkills, prefSkills),
+    skillsScore: skillsScoreFromDesc,
     locationScore: computeLocationScore(
       job.location,
       job.remote,
@@ -38,12 +47,13 @@ export function computeMatchScore(
     ),
   };
 
-  // Weighted score: title 30%, skills 30%, location 20%, salary 20%
+  // Weighted score: title 40%, skills 35%, location 15%, salary 10%
+  // Title and skills (from resume) carry more weight than location/salary.
   let score = Math.round(
-    breakdown.titleScore * 0.3 +
-      breakdown.skillsScore * 0.3 +
-      breakdown.locationScore * 0.2 +
-      breakdown.salaryScore * 0.2
+    breakdown.titleScore * 0.4 +
+      breakdown.skillsScore * 0.35 +
+      breakdown.locationScore * 0.15 +
+      breakdown.salaryScore * 0.1
   );
 
   // Boost jobs hosted on supported ATS platforms (we can reliably auto-apply)
@@ -52,6 +62,50 @@ export function computeMatchScore(
   }
 
   return { score: Math.min(100, Math.max(0, score)), breakdown };
+}
+
+/**
+ * Computes a skills match score by searching for user's resume skills
+ * in BOTH the job's skill array AND the job description text.
+ * This handles the case where the API didn't extract skills properly.
+ */
+function computeSkillsScoreFromText(
+  description: string,
+  title: string,
+  jobSkills: string[],
+  preferredSkills: string[]
+): number {
+  if (preferredSkills.length === 0) return 50;
+
+  const haystack = (description + " " + title + " " + jobSkills.join(" ")).toLowerCase();
+  if (haystack.length < 20) return 30;
+
+  // Count how many of the user's skills appear in the job's text
+  let matchCount = 0;
+  for (const skill of preferredSkills) {
+    const normalized = skill.toLowerCase().trim();
+    if (!normalized || normalized.length < 3) continue;
+
+    // Check for exact phrase match
+    if (haystack.includes(normalized)) {
+      matchCount++;
+      continue;
+    }
+
+    // Check for individual word match (for multi-word skills)
+    const skillWords = normalized.split(/\s+|\(|\)|\//).filter(w => w.length > 3);
+    if (skillWords.length === 0) continue;
+
+    const matchedWords = skillWords.filter(w => haystack.includes(w));
+    // Partial match: count as 0.5 if more than half the words match
+    if (matchedWords.length / skillWords.length >= 0.5) {
+      matchCount += 0.5;
+    }
+  }
+
+  // Cap at the number of preferred skills, then convert to percentage
+  const ratio = Math.min(matchCount, preferredSkills.length) / preferredSkills.length;
+  return Math.round(ratio * 100);
 }
 
 /**
