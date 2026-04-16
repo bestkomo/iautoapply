@@ -369,17 +369,29 @@ function findQaAnswer(profile, keywords) {
 
 async function handleGreenhouse(page, profile, jobId) {
   try {
+    // Wait longer for the initial page (handles redirects from boards.greenhouse.io -> job-boards.greenhouse.io)
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+
     // Some greenhouse pages are "apply" landing pages - click through.
-    await tryClick(page, [
+    const clickedApply = await tryClick(page, [
       'a:has-text("Apply for this job")',
       'a:has-text("Apply for this Job")',
+      'a:has-text("Apply for this position")',
+      'a:has-text("Apply now")',
+      'button:has-text("Apply for this job")',
       'button:has-text("Apply")',
     ]);
-    await page.waitForTimeout(2500);
+    if (clickedApply) {
+      console.log(`[${jobId}] [Greenhouse] Clicked Apply button`);
+      await page.waitForTimeout(3000);
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    }
 
-    // Wait for the form to actually appear (look for first_name field)
+    // Wait for the form to actually appear (look for first_name field) - longer timeout
     try {
-      await page.waitForSelector('input[name="first_name"], input[id*="first_name" i], input[autocomplete="given-name"]', { timeout: 8000 });
+      await page.waitForSelector('input[name="first_name"], input[id*="first_name" i], input[autocomplete="given-name"], input[type="email"]', { timeout: 15000 });
+      console.log(`[${jobId}] [Greenhouse] Form is ready`);
     } catch {
       console.log(`[${jobId}] [Greenhouse] First name field not visible after wait`);
     }
