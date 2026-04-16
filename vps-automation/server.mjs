@@ -935,34 +935,254 @@ async function handleICIMS(page, profile, jobId) {
 // GENERIC
 // ============================================================================
 
-async function handleGeneric(page, profile, jobId) {
-  try {
-    await tryFill(page, 'input[type="email"]', profile.email);
-    await tryFill(page, 'input[name*="first" i]', profile.firstName);
-    await tryFill(page, 'input[name*="last" i]', profile.lastName);
-    await tryFill(page, 'input[name*="name" i]:not([name*="first" i]):not([name*="last" i]):not([name*="user" i])', profile.name || `${profile.firstName} ${profile.lastName}`.trim());
-    await tryFill(page, 'input[type="tel"], input[name*="phone" i]', profile.phone || "");
+// ============================================================================
+// AI-assisted helpers (Claude analyzes the DOM to find form fields and submit buttons)
+// ============================================================================
 
+async function extractFormStructure(page) {
+  return await page.evaluate(() => {
+    const isVisible = (el) => {
+      const rect = el.getBoundingClientRect();
+      const style = window.getComputedStyle(el);
+      return (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0"
+      );
+    };
+
+    const inputs = Array.from(
+      document.querySelectorAll("input, textarea, select")
+    )
+      .filter((el) => isVisible(el) && el.type !== "hidden")
+      .map((el) => {
+        const labelEl = el.labels?.[0];
+        const label = (
+          labelEl?.textContent ||
+          el.getAttribute("aria-label") ||
+          el.getAttribute("placeholder") ||
+          el.getAttribute("title") ||
+          ""
+        ).trim().substring(0, 200);
+        return {
+          label,
+          name: el.name || "",
+          id: el.id || "",
+          type: el.type || el.tagName.toLowerCase(),
+          required: el.required || false,
+        };
+      })
+      .filter((i) => i.name || i.id || i.label);
+
+    const buttons = Array.from(
+      document.querySelectorAll(
+        'button, input[type="submit"], input[type="button"], a[role="button"]'
+      )
+    )
+      .filter((el) => isVisible(el))
+      .map((el) => {
+        const text = (el.textContent || el.value || "").trim().substring(0, 100);
+        return { text, id: el.id || "", type: el.type || "" };
+      })
+      .filter((b) => b.text);
+
+    return { inputs, buttons, url: window.location.href, title: document.title };
+  });
+}
+
+async function askClaude(prompt) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.warn("[Claude] ANTHROPIC_API_KEY not set, skipping AI assist");
+    return null;
+  }
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 1024,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!res.ok) {
+      console.error("[Claude] API error:", res.status, await res.text());
+      return null;
+    }
+    const data = await res.json();
+    return data.content[0].text;
+  } catch (e) {
+    console.error("[Claude] Request failed:", e.message);
+    return null;
+  }
+}
+
+function parseClaudeJson(text) {
+  if (!text) return null;
+  // Strip markdown code fences
+  let cleaned = text.trim();
+  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) cleaned = fenceMatch[1];
+  // Find first { and last }
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1) return null;
+  try {
+    return JSON.parse(cleaned.substring(start, end + 1));
+  } catch (e) {
+    console.error("[Claude] JSON parse failed:", e.message, "raw:", cleaned.substring(0, 200));
+    return null;
+  }
+}
+
+async function handleGeneric(page, profile, jobId) {
+  console.log(`[${jobId}] [Generic-AI] Starting AI-assisted automation`);
+
+  try {
+    let structure = await extractFormStructure(page);
+    console.log(`[${jobId}] [Generic-AI] Initial: ${structure.inputs.length} inputs, ${structure.buttons.length} buttons`);
+
+    // If no inputs visible, look for an "Apply" button to click first
+    if (structure.inputs.length < 2 && structure.buttons.length > 0) {
+      console.log(`[${jobId}] [Generic-AI] Few inputs, looking for Apply button via Claude`);
+
+      const applyAnswer = await askClaude(
+        `You are looking at a job posting page. Find the "Apply" button (or similar - "Apply Now", "Apply for this job", "I'm Interested", etc.) that opens the application form.
+
+Buttons on the page:
+${JSON.stringify(structure.buttons.slice(0, 30))}
+
+Respond with ONLY the exact text or id of the Apply button (no quotes, no explanation). If none, respond with NONE.`
+      );
+
+      if (applyAnswer && !applyAnswer.toUpperCase().includes("NONE")) {
+        const target = applyAnswer.trim().replace(/^["']|["']$/g, "");
+        console.log(`[${jobId}] [Generic-AI] Clicking Apply: ${target}`);
+        const clicked = await tryClick(page, [
+          `#${CSS.escape ? CSS.escape(target) : target}`,
+          `button:has-text("${target}")`,
+          `a:has-text("${target}")`,
+        ]);
+        if (clicked) {
+          await page.waitForTimeout(3000);
+          structure = await extractFormStructure(page);
+          console.log(`[${jobId}] [Generic-AI] After Apply click: ${structure.inputs.length} inputs`);
+        }
+      }
+    }
+
+    if (structure.inputs.length === 0) {
+      return { success: false, message: "Generic-AI: no form fields found on page" };
+    }
+
+    // Ask Claude to map fields to profile values
+    const fieldMappingPrompt = `You are filling a job application form. Map each form field to the appropriate value from the applicant's profile. Return ONLY a JSON object where keys are the field's "name" or "id" (whichever exists) and values are what to type.
+
+Form fields:
+${JSON.stringify(structure.inputs.slice(0, 50))}
+
+Applicant profile:
+- Full name: ${profile.name || ""}
+- First name: ${profile.firstName || ""}
+- Last name: ${profile.lastName || ""}
+- Email: ${profile.email || ""}
+- Phone: ${profile.phone || ""}
+- Location: ${profile.location || ""}
+- LinkedIn URL: ${profile.linkedinUrl || ""}
+- Portfolio URL: ${profile.portfolioUrl || ""}
+
+Rules:
+- Skip file upload fields (type=file)
+- Skip checkboxes/radios (we'll handle separately)
+- For "How did you hear about us" use "Job Board"
+- For salary use "Negotiable"
+- Return JSON only, no markdown.
+
+Example: {"first_name": "John", "email": "john@example.com"}`;
+
+    const mappingText = await askClaude(fieldMappingPrompt);
+    const mapping = parseClaudeJson(mappingText);
+
+    if (mapping) {
+      console.log(`[${jobId}] [Generic-AI] Got ${Object.keys(mapping).length} field mappings from Claude`);
+      for (const [fieldKey, value] of Object.entries(mapping)) {
+        if (!value) continue;
+        // Try by name, then by id
+        const filled =
+          (await tryFill(page, `[name="${fieldKey}"]`, String(value))) ||
+          (await tryFill(page, `#${fieldKey}`, String(value))) ||
+          (await tryFill(page, `[name*="${fieldKey}" i]`, String(value)));
+        if (filled) console.log(`[${jobId}] [Generic-AI] Filled ${fieldKey}`);
+      }
+    } else {
+      // Fallback: basic heuristic fills
+      console.log(`[${jobId}] [Generic-AI] Claude mapping failed, using heuristics`);
+      await tryFill(page, 'input[type="email"]', profile.email);
+      await tryFill(page, 'input[name*="first" i]', profile.firstName);
+      await tryFill(page, 'input[name*="last" i]', profile.lastName);
+      await tryFill(page, 'input[type="tel"], input[name*="phone" i]', profile.phone || "");
+    }
+
+    // Upload resume if there's a file input
     if (profile.resumePath) {
       await tryUpload(page, 'input[type="file"]', profile.resumePath);
       await page.waitForTimeout(1500);
     }
 
-    const submitted = await tryClick(page, [
-      'button[type="submit"]:has-text("Submit")',
-      'button:has-text("Submit Application")',
-      'button:has-text("Submit")',
-      'input[type="submit"]',
-      'button[type="submit"]',
-    ]);
-    if (!submitted) return { success: false, message: "Generic: submit button not found" };
+    // Find submit button via Claude
+    const fresh = await extractFormStructure(page);
+    const submitAnswer = await askClaude(
+      `Which button submits this job application form? Common labels: "Submit Application", "Submit", "Apply", "Send Application".
+
+Buttons on the page:
+${JSON.stringify(fresh.buttons.slice(0, 30))}
+
+Respond with ONLY the exact text or id of the submit button (no quotes, no explanation). If none, respond with NONE.`
+    );
+
+    let submitted = false;
+    if (submitAnswer && !submitAnswer.toUpperCase().includes("NONE")) {
+      const target = submitAnswer.trim().replace(/^["']|["']$/g, "");
+      console.log(`[${jobId}] [Generic-AI] Submitting via: ${target}`);
+      submitted =
+        (await tryClick(page, [
+          `#${target}`,
+          `button:has-text("${target}")`,
+          `input[value="${target}"]`,
+          `button[type="submit"]:has-text("${target}")`,
+        ]));
+    }
+
+    // Fallback: try common submit selectors
+    if (!submitted) {
+      submitted = await tryClick(page, [
+        'button[type="submit"]:has-text("Submit Application")',
+        'button:has-text("Submit Application")',
+        'button[type="submit"]:has-text("Apply")',
+        'button:has-text("Apply Now")',
+        'button[type="submit"]',
+        'input[type="submit"]',
+      ]);
+    }
+
+    if (!submitted) {
+      return { success: false, message: "Generic-AI: no submit button found" };
+    }
 
     const v = await verifySuccess(page, jobId, "generic", 10000);
     return v.success
-      ? { success: true, message: `Generic: submitted (${v.reason})` }
-      : { success: false, message: `Generic: ${v.reason}` };
+      ? { success: true, message: `Generic-AI: submitted (${v.reason})` }
+      : { success: false, message: `Generic-AI: clicked submit but ${v.reason}` };
   } catch (err) {
-    return { success: false, message: `Generic: ${err.message}` };
+    console.error(`[${jobId}] [Generic-AI] Error:`, err.message);
+    return { success: false, message: `Generic-AI: ${err.message}` };
   }
 }
 
