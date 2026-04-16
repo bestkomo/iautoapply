@@ -25,6 +25,35 @@ const DEFAULTS = {
   portfolioUrl: null,
   preferredName: null,
   customAnswers: "{}",
+  streetAddress: null,
+  city: null,
+  state: null,
+  zipCode: null,
+  country: "United States",
+  visaStatus: null,
+  hasBackgroundCheck: true,
+  hasDrugTest: true,
+  hasMisdemeanor: false,
+  currentSalary: null,
+  salaryExpectation: null,
+  noticeRequired: "2 weeks",
+  preferredWorkType: "Full-time",
+  willingShifts: "Day",
+  willingOvertime: true,
+  willingWeekends: true,
+  remotePreference: "Hybrid",
+  pronouns: null,
+  hispanicLatino: "Decline to answer",
+  ageRange: "Decline to answer",
+  hasNursingLicense: false,
+  nursingLicenseState: null,
+  hasCPR: false,
+  hasBLS: false,
+  hasMedicalExperience: null,
+  hasReferences: true,
+  referenceName1: null,
+  referenceEmail1: null,
+  referencePhone1: null,
 };
 
 export async function GET() {
@@ -87,6 +116,43 @@ export async function PUT(req: Request) {
     portfolioUrl: (body.portfolioUrl as string) || null,
     preferredName: (body.preferredName as string) || null,
     customAnswers: body.customAnswers ? JSON.stringify(body.customAnswers) : "{}",
+    // Address
+    streetAddress: (body.streetAddress as string) || null,
+    city: (body.city as string) || null,
+    state: (body.state as string) || null,
+    zipCode: (body.zipCode as string) || null,
+    country: (body.country as string) || "United States",
+    // Visa
+    visaStatus: (body.visaStatus as string) || null,
+    // Background
+    hasBackgroundCheck: body.hasBackgroundCheck !== false,
+    hasDrugTest: body.hasDrugTest !== false,
+    hasMisdemeanor: body.hasMisdemeanor === true,
+    // Compensation
+    currentSalary: body.currentSalary ? Number(body.currentSalary) : null,
+    salaryExpectation: (body.salaryExpectation as string) || null,
+    noticeRequired: (body.noticeRequired as string) || "2 weeks",
+    // Work prefs
+    preferredWorkType: (body.preferredWorkType as string) || "Full-time",
+    willingShifts: (body.willingShifts as string) || "Day",
+    willingOvertime: body.willingOvertime !== false,
+    willingWeekends: body.willingWeekends !== false,
+    remotePreference: (body.remotePreference as string) || "Hybrid",
+    // Demographics ext
+    pronouns: (body.pronouns as string) || null,
+    hispanicLatino: (body.hispanicLatino as string) || "Decline to answer",
+    ageRange: (body.ageRange as string) || "Decline to answer",
+    // Healthcare
+    hasNursingLicense: body.hasNursingLicense === true,
+    nursingLicenseState: (body.nursingLicenseState as string) || null,
+    hasCPR: body.hasCPR === true,
+    hasBLS: body.hasBLS === true,
+    hasMedicalExperience: body.hasMedicalExperience ? Number(body.hasMedicalExperience) : null,
+    // References
+    hasReferences: body.hasReferences !== false,
+    referenceName1: (body.referenceName1 as string) || null,
+    referenceEmail1: (body.referenceEmail1 as string) || null,
+    referencePhone1: (body.referencePhone1 as string) || null,
   };
 
   const answers = await prisma.applicationAnswers.upsert({

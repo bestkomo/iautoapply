@@ -620,8 +620,10 @@ async function fillEmptyGreenhouseSelects(page, profile) {
         let chosenLabel = "";
 
         // Smart matching - PREFER user's questionnaire answers over defaults
-        if (labelText.includes("sponsor") || labelText.includes("visa") || labelText.includes("immigration")) {
+        if (labelText.includes("sponsor") || labelText.includes("immigration")) {
           chosenLabel = qa.requireSponsorship === true ? "Yes" : "No";
+        } else if (labelText.includes("visa status") || labelText.includes("work authorization status") || labelText.includes("authorization status")) {
+          chosenLabel = qa.visaStatus || "US Citizen";
         } else if (labelText.includes("authorized") || labelText.includes("eligible to work") || labelText.includes("legally") || labelText.includes("right to work")) {
           chosenLabel = qa.authorizedToWork === false ? "No" : "Yes";
         } else if (labelText.includes("over 18") || labelText.includes("18 years") || labelText.includes("age of 18")) {
@@ -630,20 +632,46 @@ async function fillEmptyGreenhouseSelects(page, profile) {
           chosenLabel = qa.hasDriversLicense === true ? "Yes" : "No";
         } else if (labelText.includes("felony") || labelText.includes("conviction") || labelText.includes("convicted")) {
           chosenLabel = qa.hasFelonyConviction === true ? "Yes" : "No";
+        } else if (labelText.includes("misdemeanor")) {
+          chosenLabel = qa.hasMisdemeanor === true ? "Yes" : "No";
+        } else if (labelText.includes("background check")) {
+          chosenLabel = qa.hasBackgroundCheck === false ? "No" : "Yes";
+        } else if (labelText.includes("drug test") || labelText.includes("drug screen")) {
+          chosenLabel = qa.hasDrugTest === false ? "No" : "Yes";
         } else if (labelText.includes("relocat")) {
           chosenLabel = qa.willingToRelocate === false ? "No" : "Yes";
         } else if (labelText.includes("travel")) {
           chosenLabel = qa.willingToTravel === false ? "No" : "Yes";
+        } else if (labelText.includes("overtime")) {
+          chosenLabel = qa.willingOvertime === false ? "No" : "Yes";
+        } else if (labelText.includes("weekend")) {
+          chosenLabel = qa.willingWeekends === false ? "No" : "Yes";
         } else if (labelText.includes("years") && labelText.includes("experience")) {
           chosenLabel = qa.yearsOfExperience ? String(qa.yearsOfExperience) : "5";
         } else if (labelText.includes("education") || labelText.includes("degree")) {
           chosenLabel = qa.highestEducation || "Bachelor";
         } else if (labelText.includes("hear") || labelText.includes("source") || labelText.includes("referral")) {
           chosenLabel = qa.howDidYouHear || "LinkedIn";
-        } else if (labelText.includes("salary") || labelText.includes("compensation")) {
-          chosenLabel = qa.desiredSalary ? String(qa.desiredSalary) : "Negotiable";
-        } else if (labelText.includes("start date") || labelText.includes("availability")) {
+        } else if (labelText.includes("current salary") || labelText.includes("current compensation")) {
+          chosenLabel = qa.currentSalary ? String(qa.currentSalary) : "Negotiable";
+        } else if (labelText.includes("salary") || labelText.includes("compensation") || labelText.includes("expected pay")) {
+          chosenLabel = qa.salaryExpectation || (qa.desiredSalary ? String(qa.desiredSalary) : "Negotiable");
+        } else if (labelText.includes("notice") || labelText.includes("notice period")) {
+          chosenLabel = qa.noticeRequired || "2 weeks";
+        } else if (labelText.includes("start date") || labelText.includes("availability") || labelText.includes("when can you start")) {
           chosenLabel = qa.availableStartDate || "Immediately";
+        } else if (labelText.includes("work type") || labelText.includes("employment type") || labelText.includes("position type")) {
+          chosenLabel = qa.preferredWorkType || "Full-time";
+        } else if (labelText.includes("shift") || labelText.includes("schedule")) {
+          chosenLabel = qa.willingShifts || "Day";
+        } else if (labelText.includes("remote") || labelText.includes("work model") || labelText.includes("on-site")) {
+          chosenLabel = qa.remotePreference || "Hybrid";
+        } else if (labelText.includes("pronoun")) {
+          chosenLabel = qa.pronouns || "Decline";
+        } else if (labelText.includes("hispanic") || labelText.includes("latino")) {
+          chosenLabel = qa.hispanicLatino || "Decline to";
+        } else if (labelText.includes("age range") || (labelText.includes("age") && !labelText.includes("manage"))) {
+          chosenLabel = qa.ageRange || "Decline to";
         } else if (labelText.includes("gender")) {
           chosenLabel = qa.gender || "Decline to";
         } else if (labelText.includes("race") || labelText.includes("ethnicity")) {
@@ -652,6 +680,16 @@ async function fillEmptyGreenhouseSelects(page, profile) {
           chosenLabel = qa.veteranStatus || "Decline to";
         } else if (labelText.includes("disab")) {
           chosenLabel = qa.disabilityStatus || "Decline to";
+        } else if (labelText.includes("nursing license") || labelText.includes("nursing")) {
+          chosenLabel = qa.hasNursingLicense === true ? "Yes" : "No";
+        } else if (labelText.includes("cpr")) {
+          chosenLabel = qa.hasCPR === true ? "Yes" : "No";
+        } else if (labelText.includes("bls")) {
+          chosenLabel = qa.hasBLS === true ? "Yes" : "No";
+        } else if (labelText.includes("country") && !labelText.includes("origin")) {
+          chosenLabel = qa.country || "United States";
+        } else if (labelText.includes("state")) {
+          chosenLabel = qa.state || "TX";
         }
 
         // Try to match the smart choice

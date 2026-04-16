@@ -365,6 +365,51 @@ model ApplicationAnswers {
   preferredName         String?
   customAnswers         String   @default("{}")  // JSON for any custom Q&A
 
+  // Address (Workday requires full address)
+  streetAddress         String?
+  city                  String?
+  state                 String?
+  zipCode               String?
+  country               String   @default("United States")
+
+  // Work authorization details
+  visaStatus            String?  // "US Citizen", "Permanent Resident", "H1-B", "F-1 OPT", etc.
+
+  // Background / criminal
+  hasBackgroundCheck    Boolean  @default(true)  // OK with background check
+  hasDrugTest           Boolean  @default(true)  // OK with drug test
+  hasMisdemeanor        Boolean  @default(false)
+
+  // Compensation details
+  currentSalary         Int?
+  salaryExpectation     String?  // "Negotiable" or specific range
+  noticeRequired        String   @default("2 weeks")
+
+  // Work preferences
+  preferredWorkType     String   @default("Full-time")
+  willingShifts         String   @default("Day")
+  willingOvertime       Boolean  @default(true)
+  willingWeekends       Boolean  @default(true)
+  remotePreference      String   @default("Hybrid")
+
+  // Demographics extended
+  pronouns              String?
+  hispanicLatino        String   @default("Decline to answer")
+  ageRange              String   @default("Decline to answer")
+
+  // Healthcare-specific
+  hasNursingLicense     Boolean  @default(false)
+  nursingLicenseState   String?
+  hasCPR                Boolean  @default(false)
+  hasBLS                Boolean  @default(false)
+  hasMedicalExperience  Int?
+
+  // References
+  hasReferences         Boolean  @default(true)
+  referenceName1        String?
+  referenceEmail1       String?
+  referencePhone1       String?
+
   updatedAt             DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

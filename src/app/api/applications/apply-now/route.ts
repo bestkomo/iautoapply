@@ -114,6 +114,43 @@ export async function POST(req: Request) {
         race: answers.race,
         veteranStatus: answers.veteranStatus,
         disabilityStatus: answers.disabilityStatus,
+        // Address
+        streetAddress: answers.streetAddress ?? undefined,
+        city: answers.city ?? undefined,
+        state: answers.state ?? undefined,
+        zipCode: answers.zipCode ?? undefined,
+        country: answers.country,
+        // Visa
+        visaStatus: answers.visaStatus ?? undefined,
+        // Background
+        hasBackgroundCheck: answers.hasBackgroundCheck,
+        hasDrugTest: answers.hasDrugTest,
+        hasMisdemeanor: answers.hasMisdemeanor,
+        // Compensation
+        currentSalary: answers.currentSalary ?? undefined,
+        salaryExpectation: answers.salaryExpectation ?? undefined,
+        noticeRequired: answers.noticeRequired,
+        // Work prefs
+        preferredWorkType: answers.preferredWorkType,
+        willingShifts: answers.willingShifts,
+        willingOvertime: answers.willingOvertime,
+        willingWeekends: answers.willingWeekends,
+        remotePreference: answers.remotePreference,
+        // Demographics ext
+        pronouns: answers.pronouns ?? undefined,
+        hispanicLatino: answers.hispanicLatino,
+        ageRange: answers.ageRange,
+        // Healthcare
+        hasNursingLicense: answers.hasNursingLicense,
+        nursingLicenseState: answers.nursingLicenseState ?? undefined,
+        hasCPR: answers.hasCPR,
+        hasBLS: answers.hasBLS,
+        hasMedicalExperience: answers.hasMedicalExperience ?? undefined,
+        // References
+        hasReferences: answers.hasReferences,
+        referenceName1: answers.referenceName1 ?? undefined,
+        referenceEmail1: answers.referenceEmail1 ?? undefined,
+        referencePhone1: answers.referencePhone1 ?? undefined,
       } : undefined,
     };
 

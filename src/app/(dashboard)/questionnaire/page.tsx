@@ -24,6 +24,13 @@ import {
   Briefcase,
   Heart,
   Link2,
+  MapPin,
+  Globe,
+  Search,
+  DollarSign,
+  Clock,
+  Stethoscope,
+  Users,
 } from "lucide-react";
 
 interface FormValues {
@@ -46,6 +53,43 @@ interface FormValues {
   linkedinUrl: string;
   portfolioUrl: string;
   preferredName: string;
+  // Address
+  streetAddress: string;
+  city: string;
+  state: string;
+  zipCode: string;
+  country: string;
+  // Visa
+  visaStatus: string;
+  // Background
+  hasBackgroundCheck: boolean;
+  hasDrugTest: boolean;
+  hasMisdemeanor: boolean;
+  // Compensation
+  currentSalary: number | null;
+  salaryExpectation: string;
+  noticeRequired: string;
+  // Work prefs
+  preferredWorkType: string;
+  willingShifts: string;
+  willingOvertime: boolean;
+  willingWeekends: boolean;
+  remotePreference: string;
+  // Demographics ext
+  pronouns: string;
+  hispanicLatino: string;
+  ageRange: string;
+  // Healthcare
+  hasNursingLicense: boolean;
+  nursingLicenseState: string;
+  hasCPR: boolean;
+  hasBLS: boolean;
+  hasMedicalExperience: number | null;
+  // References
+  hasReferences: boolean;
+  referenceName1: string;
+  referenceEmail1: string;
+  referencePhone1: string;
 }
 
 function Toggle({
@@ -135,6 +179,35 @@ export default function QuestionnairePage() {
         linkedinUrl: "",
         portfolioUrl: "",
         preferredName: "",
+        streetAddress: "",
+        city: "",
+        state: "",
+        zipCode: "",
+        country: "United States",
+        visaStatus: "US Citizen",
+        hasBackgroundCheck: true,
+        hasDrugTest: true,
+        hasMisdemeanor: false,
+        currentSalary: null,
+        salaryExpectation: "Negotiable",
+        noticeRequired: "2 weeks",
+        preferredWorkType: "Full-time",
+        willingShifts: "Day",
+        willingOvertime: true,
+        willingWeekends: true,
+        remotePreference: "Hybrid",
+        pronouns: "",
+        hispanicLatino: "Decline to answer",
+        ageRange: "Decline to answer",
+        hasNursingLicense: false,
+        nursingLicenseState: "",
+        hasCPR: false,
+        hasBLS: false,
+        hasMedicalExperience: null,
+        hasReferences: true,
+        referenceName1: "",
+        referenceEmail1: "",
+        referencePhone1: "",
       },
     });
 
@@ -166,6 +239,35 @@ export default function QuestionnairePage() {
             linkedinUrl: data.linkedinUrl || "",
             portfolioUrl: data.portfolioUrl || "",
             preferredName: data.preferredName || "",
+            streetAddress: data.streetAddress || "",
+            city: data.city || "",
+            state: data.state || "",
+            zipCode: data.zipCode || "",
+            country: data.country || "United States",
+            visaStatus: data.visaStatus || "US Citizen",
+            hasBackgroundCheck: data.hasBackgroundCheck ?? true,
+            hasDrugTest: data.hasDrugTest ?? true,
+            hasMisdemeanor: data.hasMisdemeanor ?? false,
+            currentSalary: data.currentSalary ?? null,
+            salaryExpectation: data.salaryExpectation || "Negotiable",
+            noticeRequired: data.noticeRequired || "2 weeks",
+            preferredWorkType: data.preferredWorkType || "Full-time",
+            willingShifts: data.willingShifts || "Day",
+            willingOvertime: data.willingOvertime ?? true,
+            willingWeekends: data.willingWeekends ?? true,
+            remotePreference: data.remotePreference || "Hybrid",
+            pronouns: data.pronouns || "",
+            hispanicLatino: data.hispanicLatino || "Decline to answer",
+            ageRange: data.ageRange || "Decline to answer",
+            hasNursingLicense: data.hasNursingLicense ?? false,
+            nursingLicenseState: data.nursingLicenseState || "",
+            hasCPR: data.hasCPR ?? false,
+            hasBLS: data.hasBLS ?? false,
+            hasMedicalExperience: data.hasMedicalExperience ?? null,
+            hasReferences: data.hasReferences ?? true,
+            referenceName1: data.referenceName1 || "",
+            referenceEmail1: data.referenceEmail1 || "",
+            referencePhone1: data.referencePhone1 || "",
           });
         }
       } catch {
@@ -444,6 +546,309 @@ export default function QuestionnairePage() {
                 placeholder="What you'd like to be called"
                 {...register("preferredName")}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section 6: Address */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <MapPin className="h-5 w-5" />
+              Address (Required by Workday)
+            </CardTitle>
+            <CardDescription>
+              Workday and other ATS platforms require your full address
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Street address</Label>
+              <Input placeholder="123 Main St" {...register("streetAddress")} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>City</Label>
+                <Input placeholder="Houston" {...register("city")} />
+              </div>
+              <div className="space-y-2">
+                <Label>State</Label>
+                <Input placeholder="TX" {...register("state")} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Zip code</Label>
+                <Input placeholder="77084" {...register("zipCode")} />
+              </div>
+              <FormSelect
+                label="Country"
+                value={values.country}
+                onChange={(v) => setValue("country", v)}
+                options={["United States", "Canada", "United Kingdom", "Mexico", "Other"]}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section 7: Visa & Work Authorization */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Globe className="h-5 w-5" />
+              Visa & Work Authorization
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <FormSelect
+              label="Visa Status"
+              value={values.visaStatus}
+              onChange={(v) => setValue("visaStatus", v)}
+              options={[
+                "US Citizen",
+                "Permanent Resident (Green Card)",
+                "H-1B Visa",
+                "F-1 OPT",
+                "F-1 STEM OPT",
+                "L-1 Visa",
+                "TN Visa",
+                "Other",
+              ]}
+            />
+          </CardContent>
+        </Card>
+
+        {/* Section 8: Background Checks */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Search className="h-5 w-5" />
+              Background Checks
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <Toggle
+              label="OK with background check?"
+              value={values.hasBackgroundCheck}
+              onChange={(v) => setValue("hasBackgroundCheck", v)}
+            />
+            <Toggle
+              label="OK with drug test?"
+              value={values.hasDrugTest}
+              onChange={(v) => setValue("hasDrugTest", v)}
+            />
+            <Toggle
+              label="Have you been convicted of a misdemeanor?"
+              value={values.hasMisdemeanor}
+              onChange={(v) => setValue("hasMisdemeanor", v)}
+            />
+          </CardContent>
+        </Card>
+
+        {/* Section 9: Compensation Details */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <DollarSign className="h-5 w-5" />
+              Compensation Details
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Current annual salary (optional)</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
+                  $
+                </span>
+                <Input
+                  type="number"
+                  className="pl-7"
+                  placeholder="e.g. 55000"
+                  {...register("currentSalary", { valueAsNumber: true })}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Salary expectation (text)</Label>
+              <Input
+                placeholder="Negotiable, or e.g. $65,000-$75,000"
+                {...register("salaryExpectation")}
+              />
+            </div>
+            <FormSelect
+              label="Notice period required"
+              value={values.noticeRequired}
+              onChange={(v) => setValue("noticeRequired", v)}
+              options={["Immediately", "1 week", "2 weeks", "1 month", "2 months"]}
+            />
+          </CardContent>
+        </Card>
+
+        {/* Section 10: Work Preferences */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Clock className="h-5 w-5" />
+              Work Preferences
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <FormSelect
+              label="Preferred work type"
+              value={values.preferredWorkType}
+              onChange={(v) => setValue("preferredWorkType", v)}
+              options={["Full-time", "Part-time", "Contract", "Temporary", "Internship"]}
+            />
+            <FormSelect
+              label="Willing to work shifts"
+              value={values.willingShifts}
+              onChange={(v) => setValue("willingShifts", v)}
+              options={["Day", "Night", "Rotating", "Weekends", "Any"]}
+            />
+            <Toggle
+              label="Willing to work overtime?"
+              value={values.willingOvertime}
+              onChange={(v) => setValue("willingOvertime", v)}
+            />
+            <Toggle
+              label="Willing to work weekends?"
+              value={values.willingWeekends}
+              onChange={(v) => setValue("willingWeekends", v)}
+            />
+            <FormSelect
+              label="Remote preference"
+              value={values.remotePreference}
+              onChange={(v) => setValue("remotePreference", v)}
+              options={["Remote", "Hybrid", "On-site", "No preference"]}
+            />
+          </CardContent>
+        </Card>
+
+        {/* Section 11: Demographics Extended */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Users className="h-5 w-5" />
+              Additional Demographics (Voluntary)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <FormSelect
+              label="Pronouns"
+              value={values.pronouns || "Decline to answer"}
+              onChange={(v) =>
+                setValue("pronouns", v === "Decline to answer" ? "" : v)
+              }
+              options={["he/him", "she/her", "they/them", "Decline to answer"]}
+            />
+            <FormSelect
+              label="Hispanic / Latino origin?"
+              value={values.hispanicLatino}
+              onChange={(v) => setValue("hispanicLatino", v)}
+              options={["Yes", "No", "Decline to answer"]}
+            />
+            <FormSelect
+              label="Age range"
+              value={values.ageRange}
+              onChange={(v) => setValue("ageRange", v)}
+              options={[
+                "Under 18",
+                "18-24",
+                "25-34",
+                "35-44",
+                "45-54",
+                "55-64",
+                "65+",
+                "Decline to answer",
+              ]}
+            />
+          </CardContent>
+        </Card>
+
+        {/* Section 12: Healthcare Credentials */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Stethoscope className="h-5 w-5" />
+              Healthcare Credentials (if applicable)
+            </CardTitle>
+            <CardDescription>
+              For nursing, medical, and clinical roles
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Toggle
+              label="Do you have an active nursing license?"
+              value={values.hasNursingLicense}
+              onChange={(v) => setValue("hasNursingLicense", v)}
+            />
+            {values.hasNursingLicense && (
+              <div className="space-y-2">
+                <Label>Nursing license state</Label>
+                <Input placeholder="TX" {...register("nursingLicenseState")} />
+              </div>
+            )}
+            <Toggle
+              label="CPR certified?"
+              value={values.hasCPR}
+              onChange={(v) => setValue("hasCPR", v)}
+            />
+            <Toggle
+              label="BLS certified?"
+              value={values.hasBLS}
+              onChange={(v) => setValue("hasBLS", v)}
+            />
+            <div className="space-y-2">
+              <Label>Years of medical/clinical experience</Label>
+              <Input
+                type="number"
+                min={0}
+                max={50}
+                placeholder="0"
+                {...register("hasMedicalExperience", { valueAsNumber: true })}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section 13: References */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Users className="h-5 w-5" />
+              Professional Reference (Optional)
+            </CardTitle>
+            <CardDescription>
+              We'll provide this when applications request a reference
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Toggle
+              label="Do you have references available upon request?"
+              value={values.hasReferences}
+              onChange={(v) => setValue("hasReferences", v)}
+            />
+            <div className="space-y-2">
+              <Label>Reference name</Label>
+              <Input placeholder="Jane Smith" {...register("referenceName1")} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Reference email</Label>
+                <Input
+                  type="email"
+                  placeholder="jane@example.com"
+                  {...register("referenceEmail1")}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Reference phone</Label>
+                <Input
+                  type="tel"
+                  placeholder="(555) 123-4567"
+                  {...register("referencePhone1")}
+                />
+              </div>
             </div>
           </CardContent>
         </Card>
