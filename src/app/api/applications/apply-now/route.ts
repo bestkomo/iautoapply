@@ -7,6 +7,7 @@ import { ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { getResumeFilePath } from "@/lib/automation/resume-file";
 import { getApplyEmail } from "@/lib/email/apply-email";
 import { sendApplyRequestToVPS } from "@/lib/automation/vps-client";
+import { generateAndUploadTailoredResume } from "@/lib/automation/tailored-resume";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -154,8 +155,31 @@ export async function POST(req: Request) {
       } : undefined,
     };
 
-    // Run automation in the background (don't block the API response)
-    runAutomationInBackground(application.id, job.applyUrl, profile, job.title, job.company);
+    // Tailor the resume for this job, then run automation in the background.
+    (async () => {
+      try {
+        const tailoredPath = await generateAndUploadTailoredResume(
+          session.user.id,
+          job.id,
+          job.title,
+          job.description || "",
+          job.company
+        );
+        if (tailoredPath) {
+          profile.resumePath = tailoredPath;
+          await prisma.applicationEvent.create({
+            data: {
+              applicationId: application.id,
+              type: "RESUME_TAILORED",
+              description: `AI-tailored resume generated for ${job.title} at ${job.company}`,
+            },
+          });
+        }
+      } catch (err) {
+        console.error("[ApplyNow] Tailor resume failed (using original):", err);
+      }
+      runAutomationInBackground(application.id, job.applyUrl!, profile, job.title, job.company);
+    })();
   } else {
     // No URL — just mark as applied (manual tracking)
     await prisma.application.update({

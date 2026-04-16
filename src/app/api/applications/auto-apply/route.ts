@@ -7,6 +7,7 @@ import { fromJsonArray } from "@/lib/db/json-array";
 import { computeMatchScore } from "@/lib/matching/job-matcher";
 import { ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { sendApplyRequestToVPS } from "@/lib/automation/vps-client";
+import { generateAndUploadTailoredResume } from "@/lib/automation/tailored-resume";
 import { getResumeFilePath, saveResumeFile } from "@/lib/automation/resume-file";
 import { canAutoApply } from "@/lib/stripe/check-subscription";
 import { getApplyEmail } from "@/lib/email/apply-email";
@@ -477,6 +478,8 @@ export async function POST() {
           applyUrl: job.applyUrl,
           jobTitle: job.title,
           company: job.company,
+          jobId: job.id,
+          jobDescription: job.description || "",
         });
       } else {
         // No URL — mark as failed, not "applied"
@@ -495,7 +498,7 @@ export async function POST() {
 
   // Run Playwright automations SEQUENTIALLY in the background (1 at a time to prevent OOM)
   if (automationTasks.length > 0) {
-    runSequentialAutomation(automationTasks, applicantProfile);
+    runSequentialAutomation(automationTasks, applicantProfile, session.user.id);
   }
 
   // Enable auto-apply preference
@@ -616,8 +619,9 @@ async function runAutomation(
  * This runs in the background and does not block the API response.
  */
 async function runSequentialAutomation(
-  tasks: { applicationId: string; applyUrl: string; jobTitle: string; company: string }[],
-  profile: ApplicantProfile
+  tasks: { applicationId: string; applyUrl: string; jobTitle: string; company: string; jobId: string; jobDescription: string }[],
+  profile: ApplicantProfile,
+  userId: string
 ) {
   console.log(`[AutoApply] Starting sequential automation for ${tasks.length} jobs`);
 
@@ -625,10 +629,35 @@ async function runSequentialAutomation(
     const task = tasks[i];
     console.log(`[AutoApply] Running automation ${i + 1}/${tasks.length}: ${task.jobTitle}`);
 
+    // Tailor resume for this specific job before applying
+    const taskProfile: ApplicantProfile = { ...profile };
+    try {
+      const tailoredPath = await generateAndUploadTailoredResume(
+        userId,
+        task.jobId,
+        task.jobTitle,
+        task.jobDescription,
+        task.company
+      );
+      if (tailoredPath) {
+        taskProfile.resumePath = tailoredPath;
+        await prisma.applicationEvent.create({
+          data: {
+            applicationId: task.applicationId,
+            type: "RESUME_TAILORED",
+            description: `AI-tailored resume generated for ${task.jobTitle} at ${task.company}`,
+          },
+        });
+        console.log(`[AutoApply] Using tailored resume: ${tailoredPath}`);
+      }
+    } catch (err) {
+      console.error(`[AutoApply] Tailor failed (using original):`, err);
+    }
+
     await runAutomation(
       task.applicationId,
       task.applyUrl,
-      profile,
+      taskProfile,
       task.jobTitle,
       task.company
     );
