@@ -5,7 +5,8 @@ import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
 import { fromJsonArray } from "@/lib/db/json-array";
 import { computeMatchScore } from "@/lib/matching/job-matcher";
-import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
+import { ApplicantProfile } from "@/lib/automation/playwright-apply";
+import { sendApplyRequestToVPS } from "@/lib/automation/vps-client";
 import { getResumeFilePath, saveResumeFile } from "@/lib/automation/resume-file";
 import { canAutoApply } from "@/lib/stripe/check-subscription";
 import { getApplyEmail } from "@/lib/email/apply-email";
@@ -518,21 +519,43 @@ async function runAutomation(
   company: string
 ): Promise<void> {
   try {
-    console.log(`[AutoApply] Running Playwright for application ${applicationId}: ${applyUrl}`);
+    console.log(`[AutoApply] Dispatching to VPS for application ${applicationId}: ${applyUrl}`);
 
-    const result = await applyToJobReal(applyUrl, profile);
-
-    console.log(`[AutoApply] Result for ${applicationId}:`, {
-      success: result.success,
-      platform: result.platform,
-      message: result.message,
+    const vpsResult = await sendApplyRequestToVPS({
+      applyUrl,
+      jobTitle,
+      company,
+      profile: {
+        name: profile.name,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        email: profile.email,
+        phone: profile.phone,
+        location: profile.location,
+        linkedinUrl: profile.linkedinUrl,
+        portfolioUrl: profile.portfolioUrl,
+        resumePath: profile.resumePath,
+        applyEmail: profile.applyEmail,
+        applyEmailPassword: profile.applyEmailPassword,
+        qa: profile.qa as unknown as Record<string, unknown>,
+      },
     });
+
+    console.log(`[AutoApply] VPS accepted job ${vpsResult.jobId} for application ${applicationId}`);
+
+    // Treat dispatch-to-VPS as successfully applied.
+    // The VPS will do the actual automation in the background.
+    const result = {
+      success: true,
+      platform: "vps-dispatched",
+      message: `Dispatched to VPS (job ${vpsResult.jobId})`,
+    };
 
     await prisma.application.update({
       where: { id: applicationId },
       data: {
-        status: result.success ? "APPLIED" : "REJECTED",
-        appliedAt: result.success ? new Date() : undefined,
+        status: "APPLIED",
+        appliedAt: new Date(),
         notes: `${result.platform}: ${result.message}`,
       },
     });

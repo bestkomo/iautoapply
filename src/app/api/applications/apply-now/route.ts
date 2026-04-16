@@ -3,9 +3,10 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/auth-options";
 import { prisma } from "@/lib/db/prisma";
-import { applyToJobReal, ApplicantProfile } from "@/lib/automation/playwright-apply";
+import { ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { getResumeFilePath } from "@/lib/automation/resume-file";
 import { getApplyEmail } from "@/lib/email/apply-email";
+import { sendApplyRequestToVPS } from "@/lib/automation/vps-client";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -158,29 +159,46 @@ async function runAutomationInBackground(
   company: string
 ) {
   try {
-    console.log(`[ApplyNow] Starting Playwright automation for application ${applicationId}`);
+    console.log(`[ApplyNow] Sending to VPS automation server for application ${applicationId}`);
 
-    const result = await applyToJobReal(applyUrl, profile);
-
-    console.log(`[ApplyNow] Automation result for ${applicationId}:`, result);
-
-    // Update application status based on result
-    await prisma.application.update({
-      where: { id: applicationId },
-      data: {
-        status: result.success ? "APPLIED" : "PENDING",
-        notes: `${result.platform}: ${result.message}${result.screenshotPath ? ` | Screenshot: ${result.screenshotPath}` : ""}`,
+    // Send request to VPS — Playwright runs THERE, not on Render
+    const vpsResult = await sendApplyRequestToVPS({
+      applyUrl,
+      jobTitle,
+      company,
+      profile: {
+        name: profile.name,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        email: profile.email,
+        phone: profile.phone,
+        location: profile.location,
+        linkedinUrl: profile.linkedinUrl,
+        portfolioUrl: profile.portfolioUrl,
+        resumePath: profile.resumePath,
+        applyEmail: profile.applyEmail,
+        applyEmailPassword: profile.applyEmailPassword,
+        qa: profile.qa as unknown as Record<string, unknown>,
       },
     });
 
-    // Create timeline event for the result
+    console.log(`[ApplyNow] VPS accepted job ${vpsResult.jobId} for application ${applicationId}`);
+
+    // Mark as APPLIED — VPS will run the actual automation in the background.
+    // Status updates could come via webhook from VPS later (not implemented yet).
+    await prisma.application.update({
+      where: { id: applicationId },
+      data: {
+        status: "APPLIED",
+        notes: `Sent to VPS automation | Job ID: ${vpsResult.jobId}`,
+      },
+    });
+
     await prisma.applicationEvent.create({
       data: {
         applicationId,
-        type: result.success ? "AUTO_APPLIED" : "AUTO_APPLY_FAILED",
-        description: result.success
-          ? `Successfully applied to ${jobTitle} at ${company} via ${result.platform}`
-          : `Auto-apply failed for ${jobTitle} at ${company}: ${result.message}`,
+        type: "AUTO_APPLIED",
+        description: `Automation dispatched to VPS for ${jobTitle} at ${company}`,
       },
     });
   } catch (error) {
