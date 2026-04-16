@@ -11,18 +11,46 @@ export async function GET() {
   if (!session?.user?.id)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const profile = await prisma.userProfile.findFirst({
-    where: { userId: session.user.id },
-    include: {
-      experiences: { orderBy: { sortOrder: "asc" } },
-      education: { orderBy: { startDate: "desc" } },
-      skills: true,
-      certifications: true,
-      languages: true,
-    },
-  });
+  const [profile, subscription] = await Promise.all([
+    prisma.userProfile.findFirst({
+      where: { userId: session.user.id },
+      include: {
+        experiences: { orderBy: { sortOrder: "asc" } },
+        education: { orderBy: { startDate: "desc" } },
+        skills: true,
+        certifications: true,
+        languages: true,
+      },
+    }),
+    prisma.subscription.findFirst({
+      where: { userId: session.user.id },
+      select: {
+        plan: true,
+        currentPeriodEnd: true,
+        stripeCustomerId: true,
+        stripeSubId: true,
+      },
+    }),
+  ]);
 
-  if (!profile) return NextResponse.json(null);
+  // Determine effective plan (treats expired subscriptions as FREE)
+  let effectivePlan = "FREE";
+  if (subscription) {
+    const now = new Date();
+    const active =
+      !subscription.currentPeriodEnd ||
+      subscription.currentPeriodEnd > now ||
+      subscription.plan === "ENTERPRISE";
+    effectivePlan = active ? subscription.plan : "FREE";
+  }
+
+  if (!profile) {
+    return NextResponse.json({
+      subscription: subscription
+        ? { ...subscription, plan: effectivePlan }
+        : { plan: effectivePlan },
+    });
+  }
 
   // Parse JSON array fields before sending to frontend
   const response = {
@@ -31,6 +59,9 @@ export async function GET() {
       ...exp,
       bullets: fromJsonArray(exp.bullets as string),
     })),
+    subscription: subscription
+      ? { ...subscription, plan: effectivePlan }
+      : { plan: effectivePlan },
   };
 
   return NextResponse.json(response);

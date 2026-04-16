@@ -12,7 +12,12 @@
       "Bash(find C:Usersworkpc -maxdepth 3 -name *.pdf -o -name *.docx)",
       "Bash(find C:Usersworkpc -maxdepth 4 -iname *resume* -o -iname *cv*)",
       "Bash(npm ls:*)",
-      "Bash(node prisma/seed.mjs)"
+      "Bash(node prisma/seed.mjs)",
+      "Bash(PYTHONIOENCODING=utf-8 python)",
+      "Bash(node -e ' *)",
+      "Bash(grep -v \"^$\")",
+      "Bash(node scripts/create-test-account.mjs)",
+      "Bash(node scripts/grant-admin.mjs)"
     ]
   }
 }
