@@ -1,6 +1,8 @@
 /**
  * iAutoApply Automation Server
  * Runs on VPS, receives job application requests, uses Playwright to submit them.
+ *
+ * REAL SUBMISSION MODE - actually clicks Submit and verifies success.
  */
 import express from "express";
 import { chromium } from "playwright";
@@ -12,6 +14,38 @@ const PORT = process.env.PORT || 4000;
 const API_KEY = process.env.AUTOMATION_API_KEY || "iautoaply-secret-change-me";
 const SCREENSHOT_DIR = "/var/lib/iautoaply/screenshots";
 const RESUME_DIR = "/var/lib/iautoaply/resumes";
+
+// Shared password used when an ATS forces us to create an account (Workday).
+const ATS_ACCOUNT_PASSWORD = "iAutoApply2024!";
+
+// Words that, when present on the page after submit, signal success.
+const SUCCESS_TEXT_PATTERNS = [
+  "thank you for your interest",
+  "thanks for applying",
+  "thank you for applying",
+  "application has been received",
+  "application has been submitted",
+  "application submitted",
+  "we've received your application",
+  "we have received your application",
+  "application received",
+  "thanks for your application",
+  "your application was sent",
+  "you have successfully submitted",
+  "successfully submitted",
+  "submission successful",
+];
+
+const SUCCESS_URL_PATTERNS = [
+  "/thanks",
+  "/thank-you",
+  "/thankyou",
+  "/confirmation",
+  "/success",
+  "/complete",
+  "/submitted",
+  "application-submitted",
+];
 
 // Ensure directories exist
 await fs.mkdir(SCREENSHOT_DIR, { recursive: true });
@@ -96,10 +130,11 @@ async function runApply(jobId, applyUrl, profile, jobTitle, company) {
   let browser;
   let platform = "unknown";
   let screenshotPath = null;
+  let page = null;
 
   try {
     const url = applyUrl.toLowerCase();
-    if (url.includes("greenhouse.io")) platform = "greenhouse";
+    if (url.includes("greenhouse.io") || url.includes("job-boards.greenhouse.io")) platform = "greenhouse";
     else if (url.includes("lever.co")) platform = "lever";
     else if (url.includes("myworkdayjobs.com") || url.includes("workday.com")) platform = "workday";
     else if (url.includes("smartrecruiters.com")) platform = "smartrecruiters";
@@ -115,14 +150,17 @@ async function runApply(jobId, applyUrl, profile, jobTitle, company) {
     });
 
     const context = await browser.newContext({
-      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      viewport: { width: 1280, height: 800 },
+      userAgent:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      viewport: { width: 1280, height: 900 },
+      acceptDownloads: false,
     });
 
-    const page = await context.newPage();
+    page = await context.newPage();
+    // Workday needs more time; we override per-step where needed.
     page.setDefaultTimeout(30000);
 
-    await page.goto(applyUrl, { waitUntil: "domcontentloaded" });
+    await page.goto(applyUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForTimeout(2000);
 
     // Dismiss cookie banners
@@ -133,13 +171,21 @@ async function runApply(jobId, applyUrl, profile, jobTitle, company) {
     if (platform === "greenhouse") result = await handleGreenhouse(page, profile, jobId);
     else if (platform === "lever") result = await handleLever(page, profile, jobId);
     else if (platform === "workday") result = await handleWorkday(page, profile, jobId);
+    else if (platform === "smartrecruiters") result = await handleSmartRecruiters(page, profile, jobId);
+    else if (platform === "icims") result = await handleICIMS(page, profile, jobId);
     else result = await handleGeneric(page, profile, jobId);
 
     screenshotPath = path.join(SCREENSHOT_DIR, `${jobId}-${platform}-final.png`);
-    await page.screenshot({ path: screenshotPath, fullPage: false });
+    try {
+      await page.screenshot({ path: screenshotPath, fullPage: false });
+    } catch (e) {
+      console.warn(`[${jobId}] Screenshot failed: ${e.message}`);
+    }
 
     const duration = Date.now() - startTime;
-    console.log(`[${jobId}] Done in ${duration}ms - ${result.success ? "SUCCESS" : "FAILED"}: ${result.message}`);
+    console.log(
+      `[${jobId}] Done in ${duration}ms - ${result.success ? "SUCCESS" : "FAILED"}: ${result.message}`
+    );
 
     jobResults.set(jobId, {
       status: "complete",
@@ -151,6 +197,13 @@ async function runApply(jobId, applyUrl, profile, jobTitle, company) {
     });
   } catch (err) {
     console.error(`[${jobId}] Error:`, err.message);
+    // Try to grab a final screenshot even on error.
+    if (page && !screenshotPath) {
+      try {
+        screenshotPath = path.join(SCREENSHOT_DIR, `${jobId}-${platform}-error.png`);
+        await page.screenshot({ path: screenshotPath, fullPage: false });
+      } catch {}
+    }
     jobResults.set(jobId, {
       status: "complete",
       success: false,
@@ -161,149 +214,755 @@ async function runApply(jobId, applyUrl, profile, jobTitle, company) {
     });
   } finally {
     if (browser) await browser.close().catch(() => {});
-
     // Clean up old results after 1 hour
     setTimeout(() => jobResults.delete(jobId), 3600000);
   }
 }
 
+// ============================================================================
+// Common helpers
+// ============================================================================
+
 async function dismissPopups(page) {
   const selectors = [
-    'button:has-text("Accept")',
     'button:has-text("Accept all")',
+    'button:has-text("Accept All")',
+    'button:has-text("Accept")',
     'button:has-text("I agree")',
     'button:has-text("Got it")',
-    '[id*="cookie"] button',
-    '[class*="cookie"] button',
+    'button:has-text("OK")',
+    '[id*="cookie" i] button:has-text("Accept")',
+    '[class*="cookie" i] button:has-text("Accept")',
+    '#onetrust-accept-btn-handler',
   ];
   for (const sel of selectors) {
     try {
-      await page.click(sel, { timeout: 1000 });
-      await page.waitForTimeout(500);
+      const loc = page.locator(sel).first();
+      if (await loc.isVisible({ timeout: 500 })) {
+        await loc.click({ timeout: 1500 });
+        await page.waitForTimeout(500);
+        break;
+      }
     } catch {}
   }
 }
 
+async function tryClick(page, selectors, opts = {}) {
+  const timeout = opts.timeout || 3000;
+  for (const sel of selectors) {
+    try {
+      const loc = page.locator(sel).first();
+      if (await loc.isVisible({ timeout: 1000 })) {
+        await loc.click({ timeout });
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
+async function tryFill(page, selector, value, opts = {}) {
+  if (value === undefined || value === null || value === "") return false;
+  const timeout = opts.timeout || 3000;
+  try {
+    const loc = page.locator(selector).first();
+    if (await loc.isVisible({ timeout: 1500 })) {
+      await loc.fill(String(value), { timeout });
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+async function tryUpload(page, selector, filePath, opts = {}) {
+  if (!filePath) return false;
+  const timeout = opts.timeout || 5000;
+  try {
+    // Resume uploads often target hidden inputs, so don't require visibility.
+    await page.locator(selector).first().setInputFiles(filePath, { timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Parse "Houston, TX 77084" or similar into components.
+function parseLocation(location) {
+  if (!location) return { city: "", state: "", zip: "", street: "" };
+  const str = String(location).trim();
+  // "City, ST ZIP"
+  const m = str.match(/^(.*?),\s*([A-Za-z]{2})\s*(\d{5})?\s*$/);
+  if (m) {
+    return { city: m[1].trim(), state: m[2].toUpperCase(), zip: m[3] || "", street: "" };
+  }
+  // Fallback: first chunk is city.
+  const parts = str.split(",").map(p => p.trim());
+  return {
+    city: parts[0] || "",
+    state: parts[1] || "",
+    zip: parts[2] || "",
+    street: "",
+  };
+}
+
+// Check page for success indicators after submit.
+async function verifySuccess(page, jobId, platform, waitMs = 10000) {
+  await page.waitForTimeout(waitMs);
+  let url = "";
+  let bodyText = "";
+  try {
+    url = (page.url() || "").toLowerCase();
+  } catch {}
+  try {
+    bodyText = (await page.locator("body").innerText({ timeout: 5000 })).toLowerCase();
+  } catch {}
+
+  for (const p of SUCCESS_URL_PATTERNS) {
+    if (url.includes(p)) {
+      return { success: true, reason: `url matched "${p}"` };
+    }
+  }
+  for (const p of SUCCESS_TEXT_PATTERNS) {
+    if (bodyText.includes(p)) {
+      return { success: true, reason: `page matched "${p}"` };
+    }
+  }
+  return { success: false, reason: "no success indicator found" };
+}
+
+// Find a QA answer in profile.qa by matching keywords against the question.
+function findQaAnswer(profile, keywords) {
+  if (!profile || !profile.qa) return null;
+  const qa = profile.qa;
+  // If qa is an array of {question, answer}
+  if (Array.isArray(qa)) {
+    for (const item of qa) {
+      const q = String(item.question || item.q || "").toLowerCase();
+      if (keywords.some(k => q.includes(k))) return item.answer || item.a;
+    }
+    return null;
+  }
+  // If qa is a flat object keyed by known fields
+  if (typeof qa === "object") {
+    for (const k of Object.keys(qa)) {
+      const kl = k.toLowerCase();
+      if (keywords.some(kw => kl.includes(kw))) return qa[k];
+    }
+  }
+  return null;
+}
+
+// ============================================================================
+// GREENHOUSE
+// ============================================================================
+
 async function handleGreenhouse(page, profile, jobId) {
   try {
-    // Click "Apply" button if present
+    // Some greenhouse pages are "apply" landing pages - click through.
     await tryClick(page, [
       'a:has-text("Apply for this job")',
+      'a:has-text("Apply for this Job")',
       'button:has-text("Apply")',
-      'a:has-text("Apply")',
     ]);
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(1500);
 
-    // Fill fields
-    await tryFill(page, 'input[name="first_name"], input[id*="first_name"]', profile.firstName);
-    await tryFill(page, 'input[name="last_name"], input[id*="last_name"]', profile.lastName);
-    await tryFill(page, 'input[type="email"]', profile.email);
-    await tryFill(page, 'input[type="tel"], input[name*="phone"]', profile.phone || "");
+    // Basic fields.
+    await tryFill(page, 'input[name="first_name"], input[id*="first_name" i], input[autocomplete="given-name"]', profile.firstName);
+    await tryFill(page, 'input[name="last_name"], input[id*="last_name" i], input[autocomplete="family-name"]', profile.lastName);
+    await tryFill(page, 'input[type="email"], input[name*="email" i]', profile.email);
+    await tryFill(page, 'input[type="tel"], input[name*="phone" i]', profile.phone || "");
 
-    // Upload resume
+    // Resume upload - try several selectors that Greenhouse uses.
     if (profile.resumePath) {
-      await tryUpload(page, 'input[type="file"]', profile.resumePath);
+      const uploaded =
+        (await tryUpload(page, 'input[type="file"][id*="resume" i]', profile.resumePath)) ||
+        (await tryUpload(page, 'input[type="file"][name*="resume" i]', profile.resumePath)) ||
+        (await tryUpload(page, 'input[type="file"]', profile.resumePath));
+      if (uploaded) await page.waitForTimeout(1500);
     }
 
-    // Scroll to bottom to reveal all fields
+    // Cover letter (optional)
+    if (profile.coverLetterPath) {
+      await tryUpload(page, 'input[type="file"][id*="cover" i], input[type="file"][name*="cover" i]', profile.coverLetterPath);
+      await page.waitForTimeout(1000);
+    }
+
+    // Country (required React Select)
+    await selectGreenhouseDropdown(page, ["country"], "United States");
+
+    // Location (City) autocomplete
+    const cityValue = profile.city || parseLocation(profile.location).city || "";
+    if (cityValue) {
+      await fillGreenhouseAutocomplete(page, ["location", "city"], cityValue);
+    }
+
+    // LinkedIn, website (common optional fields)
+    if (profile.linkedin) {
+      await tryFill(page, 'input[name*="linkedin" i], input[id*="linkedin" i]', profile.linkedin);
+    }
+
+    // Custom questions from qa profile
+    await fillGreenhouseCustomQuestions(page, profile);
+
+    // Scroll to bottom so every field renders and lazy validators fire.
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.waitForTimeout(1000);
 
-    // Take screenshot before submit
-    const screenshotPath = path.join(SCREENSHOT_DIR, `${jobId}-greenhouse-pre-submit.png`);
-    await page.screenshot({ path: screenshotPath });
+    // Pre-submit screenshot
+    const preShot = path.join(SCREENSHOT_DIR, `${jobId}-greenhouse-pre-submit.png`);
+    try { await page.screenshot({ path: preShot, fullPage: true }); } catch {}
 
-    // For safety, don't actually submit yet - just verify we got this far
-    return { success: true, message: "Greenhouse form filled (dry-run mode)" };
+    // SUBMIT
+    const submitted = await tryClick(page, [
+      'button[type="submit"]:has-text("Submit Application")',
+      'button[type="submit"]:has-text("Submit application")',
+      'button:has-text("Submit Application")',
+      'input[type="submit"]',
+      'button[type="submit"]',
+    ]);
+    if (!submitted) {
+      return { success: false, message: "Greenhouse: submit button not found" };
+    }
+
+    const v = await verifySuccess(page, jobId, "greenhouse", 10000);
+    if (v.success) return { success: true, message: `Greenhouse: submitted (${v.reason})` };
+    return { success: false, message: `Greenhouse: clicked submit but ${v.reason}` };
   } catch (err) {
     return { success: false, message: `Greenhouse: ${err.message}` };
   }
 }
 
-async function handleLever(page, profile, jobId) {
-  try {
-    await tryClick(page, ['a.postings-btn:has-text("Apply")', 'a:has-text("Apply")']);
-    await page.waitForTimeout(2000);
-
-    await tryFill(page, 'input[name="name"]', profile.name);
-    await tryFill(page, 'input[name="email"]', profile.email);
-    await tryFill(page, 'input[name="phone"]', profile.phone || "");
-
-    if (profile.resumePath) {
-      await tryUpload(page, 'input[type="file"][name="resume"], input[type="file"]', profile.resumePath);
-    }
-
-    return { success: true, message: "Lever form filled (dry-run mode)" };
-  } catch (err) {
-    return { success: false, message: `Lever: ${err.message}` };
-  }
-}
-
-async function handleWorkday(page, profile, jobId) {
-  try {
-    // Click Apply
-    await tryClick(page, ['a[data-uxi-element-id*="apply"]', 'a:has-text("Apply")', 'button:has-text("Apply")']);
-    await page.waitForTimeout(3000);
-
-    // Handle method dialog (Apply Manually)
-    await tryClick(page, [
-      'button:has-text("Apply Manually")',
-      'button[data-automation-id*="applyManually"]',
-    ]);
-    await page.waitForTimeout(2000);
-
-    // Basic email fill on account page
-    await tryFill(page, 'input[type="email"], input[data-automation-id="email"]', profile.email);
-
-    return { success: true, message: "Workday initial page reached (dry-run mode)" };
-  } catch (err) {
-    return { success: false, message: `Workday: ${err.message}` };
-  }
-}
-
-async function handleGeneric(page, profile, jobId) {
-  try {
-    await tryFill(page, 'input[type="email"]', profile.email);
-    await tryFill(page, 'input[name*="name"]', profile.name);
-    await tryFill(page, 'input[name*="phone"]', profile.phone || "");
-
-    if (profile.resumePath) {
-      await tryUpload(page, 'input[type="file"]', profile.resumePath);
-    }
-
-    return { success: true, message: "Generic form filled (dry-run mode)" };
-  } catch (err) {
-    return { success: false, message: `Generic: ${err.message}` };
-  }
-}
-
-// Helpers
-async function tryClick(page, selectors) {
+async function selectGreenhouseDropdown(page, labelKeywords, value) {
+  // Greenhouse uses react-select. The label contains "Country", "Location", etc.
+  // Try clicking the visible select control, then typing the value.
+  const selectors = labelKeywords.flatMap(k => [
+    `[aria-label*="${k}" i]`,
+    `[id*="${k}" i]`,
+    `div:has(> label:has-text("${capitalize(k)}")) [class*="select"]`,
+    `label:has-text("${capitalize(k)}") + div`,
+  ]);
   for (const sel of selectors) {
     try {
-      await page.click(sel, { timeout: 3000 });
+      const loc = page.locator(sel).first();
+      if (!(await loc.isVisible({ timeout: 500 }))) continue;
+      await loc.click({ timeout: 2000 });
+      await page.waitForTimeout(300);
+      // Try typing into any now-visible input that accepts text.
+      await page.keyboard.type(value, { delay: 30 });
+      await page.waitForTimeout(600);
+      // Click a matching option if rendered.
+      const option = page.locator(`[role="option"]:has-text("${value}"), [id*="option"]:has-text("${value}"), li:has-text("${value}")`).first();
+      if (await option.isVisible({ timeout: 1500 })) {
+        await option.click({ timeout: 2000 });
+      } else {
+        await page.keyboard.press("Enter");
+      }
+      await page.waitForTimeout(400);
       return true;
     } catch {}
   }
   return false;
 }
 
-async function tryFill(page, selector, value) {
-  if (!value) return false;
+async function fillGreenhouseAutocomplete(page, labelKeywords, value) {
+  const selectors = labelKeywords.flatMap(k => [
+    `input[aria-label*="${k}" i]`,
+    `input[id*="${k}" i]`,
+    `input[name*="${k}" i]`,
+  ]);
+  for (const sel of selectors) {
+    try {
+      const loc = page.locator(sel).first();
+      if (!(await loc.isVisible({ timeout: 500 }))) continue;
+      await loc.click({ timeout: 1500 });
+      await loc.fill("");
+      await page.keyboard.type(value, { delay: 40 });
+      await page.waitForTimeout(1200);
+      // Click first suggestion if there is one
+      const suggestion = page.locator(`[role="option"], li[role="option"], .autocomplete-results li, ul[role="listbox"] li`).first();
+      if (await suggestion.isVisible({ timeout: 1500 })) {
+        await suggestion.click({ timeout: 2000 });
+      } else {
+        await page.keyboard.press("Enter");
+      }
+      await page.waitForTimeout(400);
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
+async function fillGreenhouseCustomQuestions(page, profile) {
+  if (!profile || !profile.qa) return;
+  // Match each label to a qa entry.
   try {
-    await page.fill(selector, value, { timeout: 3000 });
-    return true;
-  } catch {
-    return false;
+    const labels = await page.locator("label").all();
+    for (const lbl of labels) {
+      const text = (await lbl.innerText().catch(() => "")).toLowerCase().trim();
+      if (!text) continue;
+      const answer = findQaAnswer(profile, [text]) || findQaAnswer(profile, text.split(/\s+/));
+      if (!answer) continue;
+      // Find the associated input/select/textarea via for= or sibling.
+      const forAttr = await lbl.getAttribute("for");
+      if (forAttr) {
+        const field = page.locator(`#${cssEscape(forAttr)}`).first();
+        if (await field.isVisible({ timeout: 300 }).catch(() => false)) {
+          const tag = await field.evaluate(el => el.tagName.toLowerCase()).catch(() => "");
+          if (tag === "select") {
+            await field.selectOption({ label: String(answer) }).catch(async () => {
+              await field.selectOption(String(answer)).catch(() => {});
+            });
+          } else {
+            await field.fill(String(answer)).catch(() => {});
+          }
+        }
+      }
+    }
+  } catch {}
+}
+
+function cssEscape(s) {
+  return String(s).replace(/([^a-zA-Z0-9_-])/g, "\\$1");
+}
+
+function capitalize(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// ============================================================================
+// LEVER
+// ============================================================================
+
+async function handleLever(page, profile, jobId) {
+  try {
+    // Landing page may have an Apply button that leads to /apply
+    await tryClick(page, [
+      'a.postings-btn:has-text("Apply")',
+      'a[href*="/apply"]:has-text("Apply")',
+      'a:has-text("Apply for this job")',
+    ]);
+    await page.waitForTimeout(2000);
+
+    const fullName = profile.name || `${profile.firstName || ""} ${profile.lastName || ""}`.trim();
+
+    await tryFill(page, 'input[name="name"]', fullName);
+    await tryFill(page, 'input[name="email"]', profile.email);
+    await tryFill(page, 'input[name="phone"]', profile.phone || "");
+    await tryFill(page, 'input[name="org"], input[name="company"]', profile.currentCompany || "");
+    if (profile.linkedin) {
+      await tryFill(page, 'input[name="urls[LinkedIn]"], input[name*="linkedin" i]', profile.linkedin);
+    }
+    if (profile.github) {
+      await tryFill(page, 'input[name="urls[GitHub]"], input[name*="github" i]', profile.github);
+    }
+    if (profile.website) {
+      await tryFill(page, 'input[name="urls[Portfolio]"], input[name*="portfolio" i], input[name*="website" i]', profile.website);
+    }
+
+    // How did you hear about us
+    const source = findQaAnswer(profile, ["hear", "source", "referral"]) || "LinkedIn";
+    await tryFill(page, 'input[name="source"]', source);
+
+    // Resume
+    if (profile.resumePath) {
+      await tryUpload(page, 'input[type="file"][name="resume"], input[type="file"]', profile.resumePath);
+      await page.waitForTimeout(1500);
+    }
+
+    // Custom questions (Lever renders them as labeled inputs/selects/radios)
+    await fillLeverCustomQuestions(page, profile);
+
+    // Consent checkbox (common on EU postings)
+    try {
+      const consent = page.locator('input[type="checkbox"][name*="consent" i], input[type="checkbox"][name*="privacy" i]').first();
+      if (await consent.isVisible({ timeout: 500 })) {
+        await consent.check({ timeout: 1500 });
+      }
+    } catch {}
+
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(800);
+
+    const preShot = path.join(SCREENSHOT_DIR, `${jobId}-lever-pre-submit.png`);
+    try { await page.screenshot({ path: preShot, fullPage: true }); } catch {}
+
+    const submitted = await tryClick(page, [
+      '#btn-submit',
+      'button:has-text("Submit application")',
+      'button:has-text("Submit Application")',
+      'button[type="submit"]',
+    ]);
+    if (!submitted) return { success: false, message: "Lever: submit button not found" };
+
+    const v = await verifySuccess(page, jobId, "lever", 10000);
+    if (v.success) return { success: true, message: `Lever: submitted (${v.reason})` };
+    return { success: false, message: `Lever: clicked submit but ${v.reason}` };
+  } catch (err) {
+    return { success: false, message: `Lever: ${err.message}` };
   }
 }
 
-async function tryUpload(page, selector, filePath) {
+async function fillLeverCustomQuestions(page, profile) {
+  if (!profile || !profile.qa) return;
   try {
-    await page.setInputFiles(selector, filePath, { timeout: 3000 });
-    return true;
-  } catch {
-    return false;
+    const cards = await page.locator(".application-question, li.application-question").all();
+    for (const card of cards) {
+      const labelText = (await card.innerText().catch(() => "")).toLowerCase();
+      const answer = findQaAnswer(profile, [labelText]) || findQaAnswer(profile, labelText.split(/\s+/).slice(0, 6));
+      if (!answer) continue;
+      const input = card.locator('input[type="text"], textarea, select').first();
+      if (await input.isVisible({ timeout: 300 }).catch(() => false)) {
+        const tag = await input.evaluate(el => el.tagName.toLowerCase()).catch(() => "");
+        if (tag === "select") {
+          await input.selectOption({ label: String(answer) }).catch(() => {});
+        } else {
+          await input.fill(String(answer)).catch(() => {});
+        }
+      }
+    }
+  } catch {}
+}
+
+// ============================================================================
+// WORKDAY (multi-step, timeout 180s total)
+// ============================================================================
+
+async function handleWorkday(page, profile, jobId) {
+  const workdayStart = Date.now();
+  const WORKDAY_BUDGET_MS = 180000;
+  const timeLeft = () => WORKDAY_BUDGET_MS - (Date.now() - workdayStart);
+
+  try {
+    // Step 1: Click Apply on the job listing page.
+    await tryClick(page, [
+      'a[data-uxi-element-id*="apply" i]',
+      '[data-automation-id="adventureButton"]',
+      'button[data-automation-id="applyAction"]',
+      'button:has-text("Apply")',
+      'a:has-text("Apply")',
+    ]);
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    // Step 2: Method dialog - choose Apply Manually.
+    await tryClick(page, [
+      'a[data-automation-id="applyManually"]',
+      'button[data-automation-id="applyManually"]',
+      '[data-automation-id="applyManually"]',
+      'div[role="button"]:has-text("Apply Manually")',
+      'button:has-text("Apply Manually")',
+    ]);
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    if (timeLeft() < 0) return { success: false, message: "Workday: timed out at apply-method step" };
+
+    // Step 3: Create Account page.
+    const emailVisible = await page.locator('input[data-automation-id="email"]').first().isVisible({ timeout: 5000 }).catch(() => false);
+    if (emailVisible) {
+      await tryFill(page, 'input[data-automation-id="email"]', profile.email);
+      await page.waitForTimeout(3000); // password fields populate after email blur
+      await tryFill(page, 'input[data-automation-id="password"]', ATS_ACCOUNT_PASSWORD);
+      await tryFill(page, 'input[data-automation-id="verifyPassword"]', ATS_ACCOUNT_PASSWORD);
+      // Some Workday flows have a checkbox for terms.
+      try {
+        const agree = page.locator('input[data-automation-id="createAccountCheckbox"], input[type="checkbox"]').first();
+        if (await agree.isVisible({ timeout: 500 })) await agree.check({ timeout: 1500 }).catch(() => {});
+      } catch {}
+      await tryClick(page, [
+        'button[data-automation-id="click_filter"]',
+        'button[data-automation-id="createAccountSubmitButton"]',
+        'button:has-text("Create Account")',
+        'button:has-text("Sign Up")',
+      ]);
+      await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+    }
+
+    if (timeLeft() < 0) return { success: false, message: "Workday: timed out at account step" };
+
+    // Step 4: My Information
+    await tryFill(page, 'input[data-automation-id="legalNameSection_firstName"]', profile.firstName);
+    await tryFill(page, 'input[data-automation-id="legalNameSection_lastName"]', profile.lastName);
+
+    const loc = parseLocation(profile.location || "");
+    if (profile.street || profile.addressLine1) {
+      await tryFill(page, 'input[data-automation-id="addressSection_addressLine1"]', profile.street || profile.addressLine1);
+    }
+    if (loc.city) await tryFill(page, 'input[data-automation-id="addressSection_city"]', loc.city);
+    if (loc.zip) await tryFill(page, 'input[data-automation-id="addressSection_postalCode"]', loc.zip);
+    if (loc.state) {
+      await selectWorkdayDropdown(page, 'button[data-automation-id="addressSection_countryRegion"]', loc.state);
+    }
+    await tryFill(page, 'input[data-automation-id="phone-number"], input[data-automation-id="phone"]', profile.phone || "");
+
+    await tryClick(page, [
+      'button[data-automation-id="pageFooterNextButton"]',
+      'button:has-text("Save and Continue")',
+    ]);
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    if (timeLeft() < 0) return { success: false, message: "Workday: timed out at my-info step" };
+
+    // Step 5: My Experience - upload resume.
+    if (profile.resumePath) {
+      const uploaded = await tryUpload(page, 'input[data-automation-id="file-upload-input-ref"]', profile.resumePath);
+      if (uploaded) await page.waitForTimeout(5000);
+    }
+    await tryClick(page, [
+      'button[data-automation-id="pageFooterNextButton"]',
+      'button:has-text("Save and Continue")',
+    ]);
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    // Step 6: Application Questions - best-effort from profile.qa.
+    await fillWorkdayQuestions(page, profile);
+    await tryClick(page, [
+      'button[data-automation-id="pageFooterNextButton"]',
+      'button:has-text("Save and Continue")',
+    ]);
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    // Step 7: Voluntary Disclosures - default "I don't wish to answer".
+    await fillWorkdayVoluntary(page, profile);
+    await tryClick(page, [
+      'button[data-automation-id="pageFooterNextButton"]',
+      'button:has-text("Save and Continue")',
+    ]);
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    // Step 8: Self Identify - disability.
+    await fillWorkdaySelfIdentify(page, profile);
+    await tryClick(page, [
+      'button[data-automation-id="pageFooterNextButton"]',
+      'button:has-text("Save and Continue")',
+    ]);
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+
+    if (timeLeft() < 0) return { success: false, message: "Workday: timed out before review" };
+
+    // Step 9: Review & Submit.
+    // Check any mandatory acknowledgement checkboxes.
+    try {
+      const checks = await page.locator('input[type="checkbox"]').all();
+      for (const c of checks) {
+        if (await c.isVisible({ timeout: 200 }).catch(() => false)) {
+          await c.check({ timeout: 1000 }).catch(() => {});
+        }
+      }
+    } catch {}
+
+    const preShot = path.join(SCREENSHOT_DIR, `${jobId}-workday-pre-submit.png`);
+    try { await page.screenshot({ path: preShot, fullPage: true }); } catch {}
+
+    const submitted = await tryClick(page, [
+      'button[data-automation-id="pageFooterSubmitButton"]',
+      'button[data-automation-id="wd-Button-Submit"]',
+      'button:has-text("Submit")',
+    ]);
+    if (!submitted) return { success: false, message: "Workday: submit button not found" };
+
+    const v = await verifySuccess(page, jobId, "workday", 12000);
+    if (v.success) return { success: true, message: `Workday: submitted (${v.reason})` };
+    return { success: false, message: `Workday: clicked submit but ${v.reason}` };
+  } catch (err) {
+    return { success: false, message: `Workday: ${err.message}` };
+  }
+}
+
+async function selectWorkdayDropdown(page, triggerSelector, optionText) {
+  try {
+    const trigger = page.locator(triggerSelector).first();
+    if (!(await trigger.isVisible({ timeout: 1500 }))) return false;
+    await trigger.click({ timeout: 2000 });
+    await page.waitForTimeout(500);
+    const option = page.locator(`[role="option"]:has-text("${optionText}"), li:has-text("${optionText}")`).first();
+    if (await option.isVisible({ timeout: 2000 })) {
+      await option.click({ timeout: 2000 });
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+async function fillWorkdayQuestions(page, profile) {
+  if (!profile || !profile.qa) return;
+  try {
+    const fields = await page.locator('[data-automation-id*="question" i], [data-automation-id*="Question"]').all();
+    for (const f of fields) {
+      const label = (await f.innerText().catch(() => "")).toLowerCase();
+      const answer = findQaAnswer(profile, [label]) || findQaAnswer(profile, label.split(/\s+/).slice(0, 6));
+      if (!answer) continue;
+      const input = f.locator('input, textarea, select').first();
+      if (await input.isVisible({ timeout: 300 }).catch(() => false)) {
+        const tag = await input.evaluate(el => el.tagName.toLowerCase()).catch(() => "");
+        if (tag === "select") {
+          await input.selectOption({ label: String(answer) }).catch(() => {});
+        } else {
+          await input.fill(String(answer)).catch(() => {});
+        }
+      }
+    }
+  } catch {}
+}
+
+async function fillWorkdayVoluntary(page, profile) {
+  // Default behavior: pick "I don't wish to answer" for gender/ethnicity/veteran unless qa overrides.
+  const triggers = [
+    'button[data-automation-id*="gender" i]',
+    'button[data-automation-id*="ethnicity" i]',
+    'button[data-automation-id*="hispanic" i]',
+    'button[data-automation-id*="veteran" i]',
+    'button[data-automation-id*="Race" i]',
+  ];
+  for (const sel of triggers) {
+    try {
+      const t = page.locator(sel).first();
+      if (!(await t.isVisible({ timeout: 500 }))) continue;
+      await t.click({ timeout: 1500 });
+      await page.waitForTimeout(300);
+      const opt = page.locator(`[role="option"]:has-text("I don"), [role="option"]:has-text("not wish"), [role="option"]:has-text("Decline")`).first();
+      if (await opt.isVisible({ timeout: 1500 })) {
+        await opt.click({ timeout: 1500 });
+      } else {
+        await page.keyboard.press("Escape");
+      }
+    } catch {}
+  }
+}
+
+async function fillWorkdaySelfIdentify(page, profile) {
+  const disabilityAnswer =
+    findQaAnswer(profile, ["disability", "disabilityStatus", "disability_status"]) || "I do not wish to answer";
+  try {
+    const triggers = await page.locator('button[data-automation-id*="disability" i], button[data-automation-id*="selfIdentify" i]').all();
+    for (const t of triggers) {
+      if (await t.isVisible({ timeout: 300 }).catch(() => false)) {
+        await t.click({ timeout: 1500 }).catch(() => {});
+        await page.waitForTimeout(300);
+        const opt = page.locator(`[role="option"]:has-text("${disabilityAnswer}"), [role="option"]:has-text("not wish")`).first();
+        if (await opt.isVisible({ timeout: 1500 })) await opt.click({ timeout: 1500 }).catch(() => {});
+        else await page.keyboard.press("Escape");
+      }
+    }
+    // Name + date acknowledgement (some Workday self-identify pages require this)
+    await tryFill(page, 'input[data-automation-id*="name" i]', `${profile.firstName || ""} ${profile.lastName || ""}`.trim());
+    const today = new Date();
+    const mm = String(today.getMonth() + 1).padStart(2, "0");
+    const dd = String(today.getDate()).padStart(2, "0");
+    const yyyy = today.getFullYear();
+    await tryFill(page, 'input[data-automation-id*="dateSection_month" i]', mm);
+    await tryFill(page, 'input[data-automation-id*="dateSection_day" i]', dd);
+    await tryFill(page, 'input[data-automation-id*="dateSection_year" i]', String(yyyy));
+  } catch {}
+}
+
+// ============================================================================
+// SMARTRECRUITERS
+// ============================================================================
+
+async function handleSmartRecruiters(page, profile, jobId) {
+  try {
+    await tryClick(page, ['button:has-text("I\'m interested")', 'a:has-text("Apply")', 'button:has-text("Apply")']);
+    await page.waitForTimeout(2000);
+
+    await tryFill(page, 'input[name="firstName"], input[id*="firstName" i]', profile.firstName);
+    await tryFill(page, 'input[name="lastName"], input[id*="lastName" i]', profile.lastName);
+    await tryFill(page, 'input[type="email"]', profile.email);
+    await tryFill(page, 'input[type="tel"]', profile.phone || "");
+
+    if (profile.resumePath) {
+      await tryUpload(page, 'input[type="file"]', profile.resumePath);
+      await page.waitForTimeout(2000);
+    }
+
+    const submitted = await tryClick(page, [
+      'button:has-text("Submit")',
+      'button[type="submit"]',
+    ]);
+    if (!submitted) return { success: false, message: "SmartRecruiters: submit not found" };
+
+    const v = await verifySuccess(page, jobId, "smartrecruiters", 10000);
+    return v.success
+      ? { success: true, message: `SmartRecruiters: submitted (${v.reason})` }
+      : { success: false, message: `SmartRecruiters: ${v.reason}` };
+  } catch (err) {
+    return { success: false, message: `SmartRecruiters: ${err.message}` };
+  }
+}
+
+// ============================================================================
+// ICIMS
+// ============================================================================
+
+async function handleICIMS(page, profile, jobId) {
+  try {
+    await tryClick(page, ['a:has-text("Apply")', 'button:has-text("Apply")']);
+    await page.waitForTimeout(2000);
+
+    await tryFill(page, 'input[id*="firstname" i], input[name*="firstname" i]', profile.firstName);
+    await tryFill(page, 'input[id*="lastname" i], input[name*="lastname" i]', profile.lastName);
+    await tryFill(page, 'input[type="email"]', profile.email);
+    await tryFill(page, 'input[type="tel"], input[name*="phone" i]', profile.phone || "");
+
+    if (profile.resumePath) {
+      await tryUpload(page, 'input[type="file"]', profile.resumePath);
+      await page.waitForTimeout(2000);
+    }
+
+    const submitted = await tryClick(page, [
+      'input[type="submit"]',
+      'button:has-text("Submit")',
+      'button[type="submit"]',
+    ]);
+    if (!submitted) return { success: false, message: "iCIMS: submit not found" };
+
+    const v = await verifySuccess(page, jobId, "icims", 10000);
+    return v.success
+      ? { success: true, message: `iCIMS: submitted (${v.reason})` }
+      : { success: false, message: `iCIMS: ${v.reason}` };
+  } catch (err) {
+    return { success: false, message: `iCIMS: ${err.message}` };
+  }
+}
+
+// ============================================================================
+// GENERIC
+// ============================================================================
+
+async function handleGeneric(page, profile, jobId) {
+  try {
+    await tryFill(page, 'input[type="email"]', profile.email);
+    await tryFill(page, 'input[name*="first" i]', profile.firstName);
+    await tryFill(page, 'input[name*="last" i]', profile.lastName);
+    await tryFill(page, 'input[name*="name" i]:not([name*="first" i]):not([name*="last" i]):not([name*="user" i])', profile.name || `${profile.firstName} ${profile.lastName}`.trim());
+    await tryFill(page, 'input[type="tel"], input[name*="phone" i]', profile.phone || "");
+
+    if (profile.resumePath) {
+      await tryUpload(page, 'input[type="file"]', profile.resumePath);
+      await page.waitForTimeout(1500);
+    }
+
+    const submitted = await tryClick(page, [
+      'button[type="submit"]:has-text("Submit")',
+      'button:has-text("Submit Application")',
+      'button:has-text("Submit")',
+      'input[type="submit"]',
+      'button[type="submit"]',
+    ]);
+    if (!submitted) return { success: false, message: "Generic: submit button not found" };
+
+    const v = await verifySuccess(page, jobId, "generic", 10000);
+    return v.success
+      ? { success: true, message: `Generic: submitted (${v.reason})` }
+      : { success: false, message: `Generic: ${v.reason}` };
+  } catch (err) {
+    return { success: false, message: `Generic: ${err.message}` };
   }
 }
 
