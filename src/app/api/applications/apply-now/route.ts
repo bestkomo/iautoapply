@@ -6,8 +6,9 @@ import { prisma } from "@/lib/db/prisma";
 import { ApplicantProfile } from "@/lib/automation/playwright-apply";
 import { getResumeFilePath } from "@/lib/automation/resume-file";
 import { getApplyEmail } from "@/lib/email/apply-email";
-import { sendApplyRequestToVPS } from "@/lib/automation/vps-client";
+import { sendApplyRequestToVPS, checkResumeOnVPS, uploadResumeToVPS } from "@/lib/automation/vps-client";
 import { generateAndUploadTailoredResume } from "@/lib/automation/tailored-resume";
+import { readFile } from "fs/promises";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -77,7 +78,22 @@ export async function POST(req: Request) {
     const nameParts = (user?.name || "").split(" ");
     const firstName = nameParts[0] || "";
     const lastName = nameParts.slice(1).join(" ") || "";
-    const resumePath = getResumeFilePath(session.user.id);
+    const localResumePath = getResumeFilePath(session.user.id);
+
+    // Make sure the user's resume is on the VPS — Playwright runs there.
+    let resumePath: string | null = await checkResumeOnVPS(session.user.id);
+    if (!resumePath && localResumePath) {
+      try {
+        const buffer = await readFile(localResumePath);
+        const result = await uploadResumeToVPS(session.user.id, "resume.pdf", buffer);
+        if (result.success && result.path) {
+          resumePath = result.path;
+          console.log("[ApplyNow] Pushed resume to VPS:", result.path);
+        }
+      } catch (e) {
+        console.error("[ApplyNow] Resume push to VPS failed:", e);
+      }
+    }
 
     // Prefer resume/profile email over OAuth email for job applications
     // The OAuth email (e.g. Google account) may differ from the contact email on the resume

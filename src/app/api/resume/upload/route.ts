@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db/prisma";
 import { getProviderForFeature } from "@/lib/ai/provider";
 import { toJsonArray } from "@/lib/db/json-array";
 import { saveResumeFile } from "@/lib/automation/resume-file";
+import { uploadResumeToVPS } from "@/lib/automation/vps-client";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -297,13 +298,25 @@ IMPORTANT: Extract EVERYTHING. For skills, be comprehensive - include programmin
     },
   });
 
-  // Save the resume file to disk so Playwright can upload it when auto-applying
+  // Save the resume file locally on Render
   try {
     await saveResumeFile(userId, buffer, file.name);
-    console.log("[Upload] Resume file saved to disk for Playwright automation");
+    console.log("[Upload] Resume file saved to local disk");
   } catch (saveErr) {
-    console.error("[Upload] Failed to save resume file to disk:", saveErr);
-    // Non-critical: don't fail the whole upload if file save fails
+    console.error("[Upload] Failed to save resume file locally:", saveErr);
+  }
+
+  // ALSO upload the resume to the VPS so Playwright can attach it during auto-apply
+  try {
+    const filename = file.name.endsWith(".pdf") ? "resume.pdf" : file.name;
+    const vpsResult = await uploadResumeToVPS(userId, filename, buffer);
+    if (vpsResult.success) {
+      console.log("[Upload] Resume uploaded to VPS at:", vpsResult.path);
+    } else {
+      console.warn("[Upload] Resume upload to VPS returned no success");
+    }
+  } catch (vpsErr) {
+    console.error("[Upload] VPS resume upload failed:", vpsErr);
   }
 
   return NextResponse.json({

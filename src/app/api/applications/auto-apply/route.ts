@@ -6,8 +6,9 @@ import { prisma } from "@/lib/db/prisma";
 import { fromJsonArray } from "@/lib/db/json-array";
 import { computeMatchScore } from "@/lib/matching/job-matcher";
 import { ApplicantProfile } from "@/lib/automation/playwright-apply";
-import { sendApplyRequestToVPS } from "@/lib/automation/vps-client";
+import { sendApplyRequestToVPS, checkResumeOnVPS, uploadResumeToVPS } from "@/lib/automation/vps-client";
 import { generateAndUploadTailoredResume } from "@/lib/automation/tailored-resume";
+import { readFile } from "fs/promises";
 import { getResumeFilePath, saveResumeFile } from "@/lib/automation/resume-file";
 import { canAutoApply } from "@/lib/stripe/check-subscription";
 import { getApplyEmail } from "@/lib/email/apply-email";
@@ -373,7 +374,28 @@ export async function POST() {
       resumePath = null;
     }
   } else {
-    console.log(`[AutoApply] Resume file found: ${resumePath}`);
+    console.log(`[AutoApply] Resume file found locally: ${resumePath}`);
+  }
+
+  // Push the resume to the VPS so Playwright can attach it. Returns the VPS-side path.
+  const vpsResume = await checkResumeOnVPS(session.user.id);
+  if (vpsResume) {
+    console.log("[AutoApply] Resume already on VPS:", vpsResume);
+    resumePath = vpsResume;
+  } else if (resumePath) {
+    try {
+      const buffer = await readFile(resumePath);
+      const filename = resumePath.endsWith(".pdf") ? "resume.pdf" : "resume.txt";
+      const uploadResult = await uploadResumeToVPS(session.user.id, filename, buffer);
+      if (uploadResult.success && uploadResult.path) {
+        console.log("[AutoApply] Pushed resume to VPS:", uploadResult.path);
+        resumePath = uploadResult.path;
+      } else {
+        console.warn("[AutoApply] VPS upload returned no path");
+      }
+    } catch (e) {
+      console.error("[AutoApply] Failed to push resume to VPS:", e);
+    }
   }
 
   // Prefer resume/profile email over OAuth email for job applications
