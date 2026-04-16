@@ -334,19 +334,30 @@ async function verifySuccess(page, jobId, platform, waitMs = 10000) {
 function findQaAnswer(profile, keywords) {
   if (!profile || !profile.qa) return null;
   const qa = profile.qa;
+  const cleanKws = keywords
+    .filter((k) => k && k.length >= 4) // must be at least 4 chars to avoid silly matches
+    .map((k) => k.toLowerCase().trim());
+  if (cleanKws.length === 0) return null;
+
   // If qa is an array of {question, answer}
   if (Array.isArray(qa)) {
     for (const item of qa) {
       const q = String(item.question || item.q || "").toLowerCase();
-      if (keywords.some(k => q.includes(k))) return item.answer || item.a;
+      if (cleanKws.some((k) => q.includes(k))) return item.answer ?? item.a;
     }
     return null;
   }
-  // If qa is a flat object keyed by known fields
+  // If qa is a flat object keyed by known fields - match WHOLE WORD only
   if (typeof qa === "object") {
     for (const k of Object.keys(qa)) {
-      const kl = k.toLowerCase();
-      if (keywords.some(kw => kl.includes(kw))) return qa[k];
+      // Convert camelCase to space-separated words (e.g. "preferredWorkType" -> "preferred work type")
+      const kl = k.replace(/([A-Z])/g, " $1").toLowerCase().trim();
+      const words = kl.split(/\s+/);
+      // Match only if EVERY label keyword is present as a whole word in the qa key
+      const allMatch = cleanKws.every((kw) =>
+        words.some((w) => w === kw || w === kw + "s")
+      );
+      if (allMatch) return qa[k];
     }
   }
   return null;
@@ -669,6 +680,10 @@ async function fillGreenhouseTextQuestions(page, profile) {
           value = profile.portfolioUrl || qa.portfolioUrl || "";
         } else if (labelText.includes("github")) {
           value = profile.github || "";
+        } else if (labelText.includes("preferred first name")) {
+          value = profile.firstName || qa.preferredName || "";
+        } else if (labelText.includes("preferred last name")) {
+          value = profile.lastName || "";
         } else if (labelText.includes("preferred name") || labelText.includes("nickname")) {
           value = qa.preferredName || profile.firstName || "";
         } else if (labelText.includes("street address") || (labelText.includes("address") && !labelText.includes("email"))) {
