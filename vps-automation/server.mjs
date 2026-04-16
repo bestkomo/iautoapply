@@ -1690,6 +1690,12 @@ async function fillAllGreenhouseReactSelects(page, profile, jobId) {
   let filledCount = 0;
 
   try {
+    // Scroll to bottom to force lazy-loaded form fields to render
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(500);
+
     // Greenhouse uses divs with role="combobox" or class containing "select" for React Select
     // Find all dropdowns: native selects, comboboxes, and React Select containers
     const dropdownInfos = await page.evaluate(() => {
@@ -1706,14 +1712,16 @@ async function fillAllGreenhouseReactSelects(page, profile, jobId) {
 
       // React Select containers — find divs that look like Greenhouse's react-select
       document.querySelectorAll('[class*="select__control"], [class*="Select__control"], [role="combobox"]').forEach((div, idx) => {
-        // Check if it has a value already (look for inner span with text or class indicating value)
-        const hasValue = div.querySelector('[class*="singleValue"], [class*="Single-value"]');
-        if (hasValue && hasValue.textContent && hasValue.textContent.trim() !== "Select...") return;
+        // Check if it has a real value already (look for singleValue span)
+        const singleValue = div.querySelector('[class*="singleValue"], [class*="single-value"], [class*="Single-value"]');
+        const valueText = singleValue?.textContent?.trim() || "";
+        // If it has a real value (not "Select...", not empty), skip
+        if (valueText && valueText !== "Select..." && valueText !== "Select" && valueText.length > 0) return;
 
         // Find the label - look for nearest sibling/parent label
         let labelText = "";
         let parent = div.parentElement;
-        for (let i = 0; i < 5 && parent && !labelText; i++) {
+        for (let i = 0; i < 6 && parent && !labelText; i++) {
           const lbl = parent.querySelector("label");
           if (lbl) labelText = lbl.textContent.trim();
           parent = parent.parentElement;
@@ -1731,12 +1739,25 @@ async function fillAllGreenhouseReactSelects(page, profile, jobId) {
       });
     });
 
+    // Count total select__control divs on page for debugging
+    const totalCount = await page.evaluate(() => {
+      return {
+        selectControls: document.querySelectorAll('[class*="select__control"]').length,
+        nativeSelects: document.querySelectorAll('select').length,
+        comboboxes: document.querySelectorAll('[role="combobox"]').length,
+      };
+    });
+    console.log(`[${jobId}] [Greenhouse] DOM has: ${totalCount.selectControls} select__control, ${totalCount.nativeSelects} native selects, ${totalCount.comboboxes} comboboxes`);
+
     if (!dropdownInfos || dropdownInfos.length === 0) {
-      console.log(`[${jobId}] [Greenhouse] No empty dropdowns found`);
+      console.log(`[${jobId}] [Greenhouse] No empty dropdowns found (all had values or no labels)`);
       return;
     }
 
     console.log(`[${jobId}] [Greenhouse] Found ${dropdownInfos.length} empty dropdowns to fill`);
+    for (const d of dropdownInfos.slice(0, 5)) {
+      console.log(`[${jobId}] [Greenhouse]   - ${d.type}: "${d.labelText.substring(0, 60)}"`);
+    }
 
     for (const info of dropdownInfos) {
       const answer = answerForReactSelect(info.labelText, qa, profile);
