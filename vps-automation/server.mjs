@@ -625,6 +625,14 @@ async function fillGreenhouseTextQuestions(page, profile) {
         const currentValue = await input.inputValue().catch(() => "");
         if (currentValue) continue; // already filled
 
+        // Skip if this input is part of a radio button group (Yes/No question)
+        const isYesNoQuestion = await input.evaluate((el) => {
+          const container = el.closest("fieldset, .field, .form-group, .question, [class*='radio']");
+          if (!container) return false;
+          return container.querySelectorAll('input[type="radio"]').length >= 2;
+        }).catch(() => false);
+        if (isYesNoQuestion) continue;
+
         // Get the label text
         const labelText = await input.evaluate((el) => {
           const id = el.id;
@@ -633,6 +641,20 @@ async function fillGreenhouseTextQuestions(page, profile) {
         }).catch(() => "");
 
         if (!labelText) continue;
+
+        // Skip questions that look like Yes/No questions even if they're text fields
+        // (some forms use text fields for Yes/No which we can't reliably answer)
+        if (
+          labelText.startsWith("are you ") ||
+          labelText.startsWith("do you ") ||
+          labelText.startsWith("have you ") ||
+          labelText.startsWith("will you ") ||
+          labelText.startsWith("can you ") ||
+          labelText.startsWith("would you ")
+        ) {
+          // These are typically Yes/No - skip text fill, let dropdown filler handle
+          continue;
+        }
 
         let value = "";
 
@@ -653,11 +675,28 @@ async function fillGreenhouseTextQuestions(page, profile) {
           value = qa.streetAddress || "";
         } else if (labelText.includes("zip") || labelText.includes("postal")) {
           value = qa.zipCode || "";
-        } else if (labelText.includes("city")) {
+        } else if (labelText.includes("city") && !labelText.includes("citizen")) {
           value = qa.city || "";
-        } else if (labelText.includes("state") && !labelText.includes("statement")) {
+        } else if (
+          // Only match real "address state" fields, NOT yes/no questions or veteran/visa
+          (labelText.includes("legal state") ||
+            labelText.includes("state of residence") ||
+            (labelText.includes("state") && labelText.includes("address")) ||
+            labelText === "state" ||
+            labelText === "state*" ||
+            labelText.startsWith("state*"))
+          && !labelText.includes("statement")
+          && !labelText.includes("united state")
+          && !labelText.includes("rn compact")
+          && !labelText.includes("nurse practitioner")
+          && !labelText.includes("legally")
+          && !labelText.includes("authorized")
+          && !labelText.includes("allowed")
+          && !labelText.includes("veteran")
+          && !labelText.includes("visa")
+        ) {
           value = qa.state || "";
-        } else if (labelText.includes("country")) {
+        } else if (labelText.includes("country") && !labelText.includes("home country") && !labelText.includes("origin")) {
           value = qa.country || "United States";
         } else if (labelText.includes("salary") && !labelText.includes("expect")) {
           value = qa.currentSalary ? String(qa.currentSalary) : "Negotiable";
