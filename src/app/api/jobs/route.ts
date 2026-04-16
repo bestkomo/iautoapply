@@ -21,6 +21,7 @@ export async function GET(req: Request) {
   const page = parseInt(searchParams.get("page") || "1");
   const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 50);
   const skip = (page - 1) * limit;
+  const autoApplyOnly = searchParams.get("autoApplyOnly") === "true";
 
   // Build where clause
   const where: Prisma.JobWhereInput = {
@@ -59,6 +60,22 @@ export async function GET(req: Request) {
 
   if (salaryMax) {
     where.salaryMin = { lte: parseInt(salaryMax) };
+  }
+
+  // Filter to jobs we can reliably auto-apply to (Greenhouse, Lever, Workday, etc.)
+  if (autoApplyOnly) {
+    where.applyUrl = {
+      contains: "",
+    };
+    where.OR = [
+      ...(where.OR || []),
+      { applyUrl: { contains: "greenhouse.io" } },
+      { applyUrl: { contains: "lever.co" } },
+      { applyUrl: { contains: "myworkdayjobs.com" } },
+      { applyUrl: { contains: "workday.com" } },
+      { applyUrl: { contains: "smartrecruiters.com" } },
+      { applyUrl: { contains: "icims.com" } },
+    ];
   }
 
   // Build orderBy

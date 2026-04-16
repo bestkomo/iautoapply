@@ -39,14 +39,37 @@ export function computeMatchScore(
   };
 
   // Weighted score: title 30%, skills 30%, location 20%, salary 20%
-  const score = Math.round(
+  let score = Math.round(
     breakdown.titleScore * 0.3 +
       breakdown.skillsScore * 0.3 +
       breakdown.locationScore * 0.2 +
       breakdown.salaryScore * 0.2
   );
 
+  // Boost jobs hosted on supported ATS platforms (we can reliably auto-apply)
+  if (isAutoApplySupported(job)) {
+    score += 10;
+  }
+
   return { score: Math.min(100, Math.max(0, score)), breakdown };
+}
+
+/**
+ * Returns true if this job's apply URL is on a platform we have a robust
+ * auto-apply handler for (Greenhouse, Lever, Workday, etc.).
+ */
+export function isAutoApplySupported(job: { applyUrl?: string | null }): boolean {
+  const url = (job.applyUrl || "").toLowerCase();
+  if (!url) return false;
+  return (
+    url.includes("greenhouse.io") ||
+    url.includes("job-boards.greenhouse.io") ||
+    url.includes("lever.co") ||
+    url.includes("myworkdayjobs.com") ||
+    url.includes("workday.com") ||
+    url.includes("smartrecruiters.com") ||
+    url.includes("icims.com")
+  );
 }
 
 function computeTitleScore(
